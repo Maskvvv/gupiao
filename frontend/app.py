@@ -4,12 +4,13 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import json
+import time
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
-st.set_page_config(page_title="A股分析与推荐", layout="wide")
+st.set_page_config(page_title="分析与推荐", layout="wide")
 
-st.title("📈 A股分析与推荐系统")
+st.title("分析与推荐")
 
 # 侧边栏设置
 with st.sidebar:
@@ -100,6 +101,17 @@ with rec_tab:
                          help="控制本次全市场筛选返回的候选数量，值越大耗时越久")
     with c3:
         gen_market = st.button("全市场自动推荐（AI精排）")
+    
+    # 关键词筛选功能
+    st.divider()
+    st.subheader("🔍 关键词智能筛选")
+    keyword_col1, keyword_col2 = st.columns([3, 1])
+    with keyword_col1:
+        keyword = st.text_input("输入关键词进行智能筛选", 
+                               placeholder="例如：稳定币、新能源、医药、芯片等",
+                               help="AI将根据关键词从A股市场中筛选相关股票，然后进行精排推荐")
+    with keyword_col2:
+        gen_keyword = st.button("🚀 关键词推荐", type="primary")
 
     if gen_manual:
         symbols = [s.strip() for s in default_symbols.split(",") if s.strip()]
@@ -110,17 +122,49 @@ with rec_tab:
                 payload = {"symbols": symbols, "period": period, "weights": st.session_state.weights}
                 cfg = st.session_state.get("ai_config", {})
                 payload.update({k: cfg.get(k) for k in ("provider", "temperature", "api_key")})
-                resp = requests.post(f"{backend_url}/api/recommend", json=payload, timeout=180)
-                data = resp.json()
-                recs = data.get("recommendations", [])
-                rec_id = data.get("rec_id")
-                if rec_id:
-                    st.success(f"已保存推荐批次，ID: {rec_id}")
-                if not recs:
-                    st.info("未返回推荐结果")
+                
+                # 启动异步任务
+                r = requests.post(f"{backend_url}/api/recommend/start", json=payload, timeout=30)
+                if r.status_code != 200:
+                    st.error(f"启动任务失败: {r.text}")
                 else:
-                    df_rec = pd.DataFrame(recs)
-                    st.dataframe(df_rec, use_container_width=True)
+                    task_id = r.json().get("task_id")
+                    if not task_id:
+                        st.error("未获得任务ID")
+                    else:
+                        prog = st.progress(0, text="正在分析股票...")
+                        status_area = st.empty()
+                        
+                        # 轮询任务状态
+                        while True:
+                            s = requests.get(f"{backend_url}/api/recommend/status/{task_id}", timeout=10)
+                            sj = s.json()
+                            if sj.get("status") == "not_found":
+                                status_area.warning("任务不存在或已过期")
+                                break
+                            percent = int(sj.get("percent", 0))
+                            done = sj.get("done", 0)
+                            total = sj.get("total", 0)
+                            prog.progress(min(max(percent, 0), 100), text=f"进度 {done}/{total}（{percent}%）")
+                            if sj.get("status") in ("done", "error"):
+                                break
+                            time.sleep(0.6)
+                        
+                        # 获取结果
+                        res = requests.get(f"{backend_url}/api/recommend/result/{task_id}", timeout=30)
+                        data = res.json()
+                        if data.get("error"):
+                            st.error(f"任务失败: {data.get('error')}")
+                        else:
+                            recs = data.get("recommendations", [])
+                            rec_id = data.get("rec_id")
+                            if rec_id:
+                                st.success(f"已保存推荐批次，ID: {rec_id}")
+                            if not recs:
+                                st.info("未返回推荐结果")
+                            else:
+                                df_rec = pd.DataFrame(recs)
+                                st.dataframe(df_rec, use_container_width=True)
             except Exception as e:
                 st.error(f"请求失败: {e}")
 
@@ -129,19 +173,110 @@ with rec_tab:
             payload = {"period": period, "max_candidates": int(topn), "weights": st.session_state.weights}
             cfg = st.session_state.get("ai_config", {})
             payload.update({k: cfg.get(k) for k in ("provider", "temperature", "api_key")})
-            r = requests.post(f"{backend_url}/api/recommend/market", json=payload, timeout=300)
-            data = r.json()
-            recs = data.get("recommendations", [])
-            rec_id = data.get("rec_id")
-            if rec_id:
-                st.success(f"已保存推荐批次，ID: {rec_id}")
-            if not recs:
-                st.info("未返回推荐结果")
+            # 1) 启动后台任务
+            r = requests.post(f"{backend_url}/api/recommend/market/start", json=payload, timeout=30)
+            if r.status_code != 200:
+                st.error(f"启动任务失败: {r.text}")
             else:
-                df_rec = pd.DataFrame(recs)
-                st.dataframe(df_rec, use_container_width=True)
+                task_id = r.json().get("task_id")
+                if not task_id:
+                    st.error("未获得任务ID")
+                else:
+                    prog = st.progress(0, text="正在分析候选股票...")
+                    status_area = st.empty()
+                    # 2) 轮询进度
+                    while True:
+                        s = requests.get(f"{backend_url}/api/recommend/market/status/{task_id}", timeout=10)
+                        sj = s.json()
+                        if sj.get("status") == "not_found":
+                            status_area.warning("任务不存在或已过期")
+                            break
+                        percent = int(sj.get("percent", 0))
+                        done = sj.get("done", 0)
+                        total = sj.get("total", 0)
+                        prog.progress(min(max(percent, 0), 100), text=f"进度 {done}/{total}（{percent}%）")
+                        if sj.get("status") in ("done", "error"):
+                            break
+                        time.sleep(0.6)
+                    # 3) 拉取结果
+                    res = requests.get(f"{backend_url}/api/recommend/market/result/{task_id}", timeout=30)
+                    data = res.json()
+                    if data.get("error"):
+                        st.error(f"任务失败: {data.get('error')}")
+                    else:
+                        recs = data.get("recommendations", [])
+                        rec_id = data.get("rec_id")
+                        if rec_id:
+                            st.success(f"已保存推荐批次，ID: {rec_id}")
+                        if not recs:
+                            st.info("未返回推荐结果")
+                        else:
+                            df_rec = pd.DataFrame(recs)
+                            st.dataframe(df_rec, use_container_width=True)
         except Exception as e:
             st.error(f"请求失败: {e}")
+
+    if gen_keyword:
+        if not keyword.strip():
+            st.warning("请先输入关键词")
+        else:
+            try:
+                payload = {
+                    "keyword": keyword.strip(),
+                    "period": period, 
+                    "max_candidates": int(topn), 
+                    "weights": st.session_state.weights
+                }
+                cfg = st.session_state.get("ai_config", {})
+                payload.update({k: cfg.get(k) for k in ("provider", "temperature", "api_key")})
+                
+                # 启动关键词筛选任务
+                r = requests.post(f"{backend_url}/api/recommend/keyword/start", json=payload, timeout=30)
+                if r.status_code != 200:
+                    st.error(f"启动任务失败: {r.text}")
+                else:
+                    task_id = r.json().get("task_id")
+                    if not task_id:
+                        st.error("未获得任务ID")
+                    else:
+                        prog = st.progress(0, text=f"正在根据关键词'{keyword}'筛选股票...")
+                        status_area = st.empty()
+                        
+                        # 轮询任务状态
+                        while True:
+                            s = requests.get(f"{backend_url}/api/recommend/keyword/status/{task_id}", timeout=10)
+                            sj = s.json()
+                            if sj.get("status") == "not_found":
+                                status_area.warning("任务不存在或已过期")
+                                break
+                            percent = int(sj.get("percent", 0))
+                            done = sj.get("done", 0)
+                            total = sj.get("total", 0)
+                            prog.progress(min(max(percent, 0), 100), text=f"关键词筛选进度 {done}/{total}（{percent}%）")
+                            if sj.get("status") in ("done", "error"):
+                                break
+                            time.sleep(0.6)
+                        
+                        # 获取结果
+                        res = requests.get(f"{backend_url}/api/recommend/keyword/result/{task_id}", timeout=30)
+                        data = res.json()
+                        if data.get("error"):
+                            st.error(f"任务失败: {data.get('error')}")
+                        else:
+                            recs = data.get("recommendations", [])
+                            rec_id = data.get("rec_id")
+                            filtered_count = data.get("filtered_count", 0)
+                            if rec_id:
+                                st.success(f"已保存推荐批次，ID: {rec_id}")
+                            if filtered_count > 0:
+                                st.info(f"🎯 根据关键词'{keyword}'筛选出 {filtered_count} 只相关股票")
+                            if not recs:
+                                st.info("未返回推荐结果")
+                            else:
+                                df_rec = pd.DataFrame(recs)
+                                st.dataframe(df_rec, use_container_width=True)
+            except Exception as e:
+                st.error(f"请求失败: {e}")
 with single_tab:
     st.subheader("单股分析")
     symbol = st.text_input("股票代码", value="000001")
