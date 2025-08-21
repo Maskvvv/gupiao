@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Env files
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+
+# Data & Cache
+data/
+cache/
+*.db
+.cache/
+
+# Streamlit
+.streamlit/
+
+# Logs
+logs/
+*.log
+
+# Node
+node_modules/
