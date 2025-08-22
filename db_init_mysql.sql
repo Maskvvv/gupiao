@@ -13,7 +13,7 @@ START TRANSACTION;
 -- 用于存放一次候选筛选/推荐任务的概要信息
 CREATE TABLE IF NOT EXISTS `recommendations` (
   `id` INT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（UTC）',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（北京时间/UTC+8）',
   `period` VARCHAR(20) NULL COMMENT '分析周期，如 1y/6mo/3mo',
   `total_candidates` INT NOT NULL DEFAULT 0 COMMENT '候选股票总数',
   `top_n` INT NOT NULL DEFAULT 0 COMMENT '入选Top数量',
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS `watchlist` (
   `id` INT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `symbol` VARCHAR(16) NOT NULL COMMENT '股票代码，唯一',
   `name` VARCHAR(64) NULL COMMENT '股票名称',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '加入时间（UTC）',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '加入时间（北京时间/UTC+8）',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_watchlist_symbol` (`symbol`),
   KEY `idx_watchlist_created_at` (`created_at`)
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS `analysis_records` (
   `action` VARCHAR(16) NULL COMMENT '建议动作：buy/hold/sell',
   `reason_brief` TEXT NULL COMMENT '理由简述（通常取 AI 文本首行）',
   `ai_advice` TEXT NULL COMMENT 'AI 生成的详细分析文本',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录时间（UTC）',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录时间（北京时间/UTC+8）',
   PRIMARY KEY (`id`),
   KEY `idx_analysis_symbol` (`symbol`),
   KEY `idx_analysis_created_at` (`created_at`)

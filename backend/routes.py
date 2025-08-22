@@ -8,8 +8,8 @@ from .services.enhanced_analyzer import EnhancedAnalyzer
 
 import os
 import time
-from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, text
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, text, event
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # 新增：持久化相关
@@ -27,10 +27,28 @@ engine = create_engine(DATABASE_URL, echo=False, future=True, connect_args=conne
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# MySQL 会话时区统一为北京时间（UTC+8），确保 DB 侧默认值/函数与应用侧一致
+if engine.url.get_backend_name().startswith("mysql"):
+    @event.listens_for(engine, "connect")
+    def _set_mysql_session_timezone(dbapi_conn, conn_record):
+        try:
+            with dbapi_conn.cursor() as cur:
+                cur.execute("SET time_zone = '+08:00'")
+        except Exception:
+            # 忽略设置失败，不影响应用侧以北京时间写入
+            pass
+
+# 统一时区：北京时间（UTC+8）
+BJ_TZ = timezone(timedelta(hours=8))
+
+def now_bj():
+    # 返回北京时间（UTC+8）的naive datetime，用于数据库持久化，确保各数据源一致
+    return datetime.now(BJ_TZ).replace(tzinfo=None)
+
 class Recommendation(Base):
     __tablename__ = "recommendations"
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=now_bj, index=True)
     period = Column(String(20))
     total_candidates = Column(Integer, default=0)
     top_n = Column(Integer, default=0)
@@ -57,7 +75,7 @@ class Watchlist(Base):
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(16), unique=True, index=True, nullable=False)
     name = Column(String(64))
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=now_bj, index=True)
 
 # 股票分析记录表
 class AnalysisRecord(Base):
@@ -68,7 +86,7 @@ class AnalysisRecord(Base):
     action = Column(String(16))
     reason_brief = Column(Text)
     ai_advice = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=now_bj, index=True)
 
 # 确保表存在（幂等）
 Base.metadata.create_all(engine)
@@ -135,17 +153,21 @@ class WatchlistBatchAnalyzeRequest(BaseModel):
 def analyze_symbol(req: RecommendationRequest):
     analyzer = EnhancedAnalyzer()
     results = []
+    fetcher = DataFetcher()
     for s in req.symbols:
-        df = DataFetcher().get_stock_data(s, period=req.period)
-        if df is not None:
-            # 转换列名为兼容格式
+        df = fetcher.get_stock_data(s, period=req.period)
+        if df is not None and not df.empty:
             df_compatible = df.reset_index()
             df_compatible.columns = [col.lower() for col in df_compatible.columns]
             analysis = analyzer.analyze_with_ai(
                 s,
                 df_compatible,
                 weights=req.weights,
-                ai_params={"provider": req.provider, "temperature": req.temperature, "api_key": req.api_key},
+                ai_params={
+                    "provider": req.provider,
+                    "temperature": req.temperature,
+                    "api_key": req.api_key,
+                },
             )
             results.append({"symbol": s, **analysis})
         else:
@@ -223,7 +245,7 @@ def recommend_symbols(req: RecommendationRequest):
     if top_list:
         with SessionLocal() as db:
             rec = Recommendation(
-                created_at=datetime.utcnow(),
+                created_at=now_bj(),
                 period=req.period,
                 total_candidates=len(candidates),
                 top_n=top_n,
@@ -299,7 +321,7 @@ def recommend_market_wide(req: MarketRecommendationRequest):
         if top_list:
             with SessionLocal() as db:
                 rec = Recommendation(
-                    created_at=datetime.utcnow(),
+                    created_at=now_bj(),
                     period=req.period,
                     total_candidates=len(candidates),
                     top_n=top_n,
@@ -405,7 +427,7 @@ def recommend_start(req: RecommendationRequest):
             if top_list:
                 with SessionLocal() as db:
                     rec = Recommendation(
-                        created_at=datetime.utcnow(),
+                        created_at=now_bj(),
                         period=req_obj.period,
                         total_candidates=len(candidates),
                         top_n=top_n,
@@ -513,7 +535,7 @@ def recommend_market_start(req: MarketRecommendationRequest):
             if top_list:
                 with SessionLocal() as db:
                     rec = Recommendation(
-                        created_at=datetime.utcnow(),
+                        created_at=now_bj(),
                         period=req.period,
                         total_candidates=len(candidates),
                         top_n=top_n,
@@ -671,7 +693,7 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
             if top_list:
                 with SessionLocal() as db:
                     rec = Recommendation(
-                        created_at=datetime.utcnow(),
+                        created_at=now_bj(),
                         period=req_obj.period,
                         total_candidates=filtered_count,
                         top_n=len(top_list),
@@ -778,7 +800,7 @@ def watchlist_list():
     with SessionLocal() as db:
         wl = db.query(Watchlist).order_by(Watchlist.created_at.desc()).all()
         fetcher = DataFetcher()
-        now = datetime.utcnow()
+        now = now_bj()
         # 将天数映射到可用period，避免修改DataFetcher签名
         days_to_period = lambda d: (
             "1d" if d <= 1 else
