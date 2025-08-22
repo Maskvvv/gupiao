@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, DatePicker, Flex, Pagination, Space, Table, Tag, Popconfirm, Segmented } from 'antd'
+import { App, Button, Card, DatePicker, Flex, Pagination, Space, Table, Tag, Popconfirm, Segmented, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { deleteRecommend, getRecommendDetails, getRecommendHistory } from '@/api/recommend'
 import { useState } from 'react'
@@ -75,6 +75,11 @@ export default function RecommendHistoryPage() {
                               <div style={{ fontWeight: 600 }}>{it.股票名称}（{it.股票代码}）</div>
                               <div>评分：{it.评分} 建议：<Tag color={it.建议动作==='buy'?'green':it.建议动作==='sell'?'red':'gold'}>{it.建议动作}</Tag></div>
                               <div>理由：{it.理由简述}</div>
+                              {it.AI详细分析 ? (
+                                <Typography.Paragraph type="secondary" ellipsis={{ rows: 8, expandable: true, symbol: '展开AI分析' }} style={{ marginBottom: 0 }}>
+                                  <b>AI详细分析：</b>{it.AI详细分析}
+                                </Typography.Paragraph>
+                              ) : null}
                             </div>
                           ))}
                         </div>

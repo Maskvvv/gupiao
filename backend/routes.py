@@ -183,6 +183,7 @@ def recommend_symbols(req: RecommendationRequest):
                     "评分": round(analysis.get("score", 0.0), 2),
                     "建议动作": analysis.get("action"),
                     "理由简述": brief,
+                    "AI详细分析": ai_text,
                     "_ai_advice": ai_text,  # 内部字段，便于持久化
                 })
 
@@ -206,6 +207,7 @@ def recommend_symbols(req: RecommendationRequest):
                     "评分": round(analysis.get("score", 0.0), 2),
                     "建议动作": analysis.get("action"),
                     "理由简述": brief,
+                    "AI详细分析": ai_text,
                     "_ai_advice": ai_text,
                 })
 
@@ -653,7 +655,8 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
                         "评分": round(analysis.get("score", 0.0), 2),
                         "建议动作": analysis.get("action"),
                         "理由简述": brief,
-                        "_ai_advice": ai_text,
+                        "AI详细分析": ai_text,
+                        "_ai_advice": ai_text,  # 内部字段，便于持久化
                     })
             
             # 排序与Top-N
@@ -804,7 +807,7 @@ def watchlist_analyze(req: WatchlistBatchAnalyzeRequest):
     analysis = analyzer.analyze_with_ai(symbol, df_compatible, weights=req.weights, ai_params=ai_params)
     # 持久化分析记录
     if analysis.get("valid", True):
-        reason = analysis.get("action_reason") or (analysis.get("ai_advice") or "").split("\n")[0]
+        reason = ((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason")
         with SessionLocal() as db:
             db.add(AnalysisRecord(
                 symbol=symbol,
@@ -847,7 +850,7 @@ def watchlist_analyze_batch_start(req: WatchlistBatchAnalyzeRequest):
                 analysis = analyzer.analyze_with_ai(s, df_compatible, weights=req_obj.weights, ai_params=ai_params)
                 # 持久化
                 if analysis.get("valid", True):
-                    reason = analysis.get("action_reason") or (analysis.get("ai_advice") or "").split("\n")[0]
+                    reason = ((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason")
                     with SessionLocal() as db:
                         db.add(AnalysisRecord(
                             symbol=s,
@@ -866,7 +869,7 @@ def watchlist_analyze_batch_start(req: WatchlistBatchAnalyzeRequest):
                     "股票名称": stock_name,
                     "评分": round(float(analysis.get("score", 0.0)), 2) if analysis.get("score") is not None else None,
                     "建议动作": analysis.get("action"),
-                    "理由简述": (analysis.get("action_reason") or (analysis.get("ai_advice") or "").split("\n")[0] or "").strip()
+                    "理由简述": (((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason") or "").strip()
                 })
                 done += 1
                 PROGRESS_STORE[task].update({"done": done, "percent": int(done*100/max(total,1))})

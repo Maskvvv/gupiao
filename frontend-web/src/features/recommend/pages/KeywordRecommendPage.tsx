@@ -34,11 +34,12 @@ export default function KeywordRecommendPage() {
   const mStart = useMutation({
     mutationFn: async () => {
       const k = keyword.trim()
-      if (!k) { throw new Error('关键词不能为空') }
+      if (!k) throw new Error('请输入关键词')
       const payload: KeywordStartPayload = {
         keyword: k,
         period,
         max_candidates: maxCandidates,
+        weights: undefined,
         exclude_st: excludeST,
         min_market_cap: minMktCap,
         provider,
@@ -46,20 +47,41 @@ export default function KeywordRecommendPage() {
         api_key: apiKey,
       }
       const r = await startKeywordRecommend(payload)
-      return r.task_id
+      return r
     },
-    onSuccess: (tid: string) => {
-      if (!tid) { message.error('未获得任务ID'); return }
-      setItems([])
-      setPercent(0)
-      setPhase(undefined)
-      setPhasePerc({ screen: 0, analyze: 0 })
-      setTaskId(tid)
-      setStatus('running')
-      try { localStorage.setItem('kw_rec_tid', String(tid)) } catch {}
+    onSuccess: (r) => {
+      if (r?.task_id) {
+        setTaskId(r.task_id)
+        setStatus('running')
+        cancelRef.current = false
+        try { localStorage.setItem('kw_rec_tid', r.task_id) } catch {}
+        poll()
+      } else {
+        message.error('启动任务失败')
+      }
     },
     onError: (e: any) => message.error(e?.message || '启动失败'),
   })
+
+  useEffect(() => {
+    // 读取高级参数
+    try {
+      const raw = localStorage.getItem('advanced_params')
+      if (raw) {
+        const cfg = JSON.parse(raw)
+        setProvider(cfg.provider)
+        setTemperature(typeof cfg.temperature === 'number' ? cfg.temperature : undefined)
+        setApiKey(typeof cfg.api_key === 'string' && cfg.api_key.trim() ? cfg.api_key : undefined)
+      }
+    } catch {}
+
+    // 恢复未完成任务
+    try {
+      const tid = localStorage.getItem('kw_rec_tid')
+      if (tid) { setTaskId(tid); setStatus('running'); cancelRef.current = false; poll() }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 推断阶段进度（后端未返回 phases 时的兜底）
   const inferPhases = (p: number): {screen:number; analyze:number} => {
@@ -69,31 +91,22 @@ export default function KeywordRecommendPage() {
     return { screen: 100, analyze }
   }
 
-  // 轮询任务进度和结果，设置超时、错误兜底
-  async function pollKeywordTask(tid: string) {
-    cancelRef.current = false
-    setStatus('running')
+  const poll = async () => {
+    if (!taskId) return
     try {
-      const startAt = Date.now()
-      while (!cancelRef.current) {
-        const s = await getKeywordStatus(tid) as KeywordTaskStatus
-        if ((s as any)?.status === 'not_found') { message.warning('任务不存在或已过期'); setStatus('error'); break }
-        const p = (s as any)?.percent
-        if (typeof p === 'number') setPercent(Math.max(0, Math.min(100, p)))
-        const phases = (s as any)?.phases as {screen?:number; analyze?:number} | undefined
-        const ph = (s as any)?.phase as 'screen'|'analyze'|'done'|undefined
-        setPhase(ph)
-        if (phases && (typeof phases.screen === 'number' || typeof phases.analyze === 'number')) {
-          setPhasePerc({ screen: Math.max(0, Math.min(100, phases.screen || 0)), analyze: Math.max(0, Math.min(100, phases.analyze || 0)) })
-        } else if (typeof p === 'number') {
-          setPhasePerc(inferPhases(p))
-        }
-        if ((s as any)?.status === 'done' || (s as any)?.status === 'error') break
-        if (Date.now() - startAt > 120000) { message.warning('轮询超时，已停止'); setStatus('timeout'); cancelRef.current = true; break }
-        await new Promise(r => setTimeout(r, 600))
-      }
-      if (!cancelRef.current) {
-        const res = await getKeywordResult(tid)
+      const s: KeywordTaskStatus = await getKeywordStatus(taskId)
+      if ((s as any)?.status === 'not_found') { setStatus('timeout'); return }
+      const done = (s as any)?.done || 0
+      const total = (s as any)?.total || 100
+      const pct = Math.round((done / Math.max(1, total)) * 100)
+      setPercent(pct)
+      const phases = (s as any)?.phases || null
+      const pp = phases ? { screen: Math.round((phases.screen || 0)), analyze: Math.round((phases.analyze || 0)) } : inferPhases(pct)
+      setPhasePerc(pp)
+      setPhase((s as any)?.phase)
+
+      if (pct >= 100 || (s as any)?.status === 'done') {
+        const res = await getKeywordResult(taskId)
         if ((res as any)?.error) { message.error(`任务失败：${(res as any).error}`); setStatus('error') }
         else if ((res as any)?.recommendations?.length) { setItems((res as any).recommendations); message.success('关键词推荐完成'); setStatus('success') }
         else { message.info('无推荐结果返回'); setStatus('success') }
@@ -105,71 +118,39 @@ export default function KeywordRecommendPage() {
     }
   }
 
-  useEffect(() => { if (taskId) pollKeywordTask(taskId); return () => { cancelRef.current = true } }, [taskId])
-  useEffect(() => { try { const saved = localStorage.getItem('kw_rec_tid'); if (saved) { setTaskId(saved); setStatus('running') } } catch {} }, [])
-  useEffect(() => { // 载入高级参数默认值
-    try {
-      const raw = localStorage.getItem('advanced_params')
-      if (raw) {
-        const cfg = JSON.parse(raw)
-        setPeriod(cfg.period ?? '1y')
-        setMaxCandidates(typeof cfg.max_candidates === 'number' ? cfg.max_candidates : 5)
-        setExcludeST(cfg.exclude_st ?? true)
-        setMinMktCap(typeof cfg.min_market_cap === 'number' ? cfg.min_market_cap : undefined)
-        setProvider(cfg.provider)
-        setTemperature(typeof cfg.temperature === 'number' ? cfg.temperature : undefined)
-        setApiKey(cfg.api_key)
-      }
-    } catch {}
-  }, [])
-
   return (
     <div className="container">
       <Card title="关键词推荐" extra={
-        <Flex gap={8} align="center">
-          <Input placeholder="输入关键词，如 AI、机器人、低空经济…" value={keyword} onChange={e=>setKeyword(e.target.value)} onPressEnter={()=>mStart.mutate()} allowClear style={{ width: 420 }} />
-          <span>Top：</span>
-          <InputNumber min={1} max={50} value={maxCandidates} onChange={(v)=> setMaxCandidates(typeof v === 'number' ? v : maxCandidates)} style={{ width: 90 }} />
+        <Flex gap={8}>
+          <Input placeholder="输入关键词" value={keyword} onChange={e=>setKeyword(e.target.value)} onPressEnter={()=>mStart.mutate()} allowClear style={{ width: 200 }} />
+          <Input placeholder="周期(如1y)" value={period} onChange={e=>setPeriod(e.target.value)} style={{ width: 100 }} />
+          <InputNumber placeholder="候选上限" value={maxCandidates} onChange={(v)=>setMaxCandidates(Number(v||0))} style={{ width: 120 }} min={1} />
+          <Input placeholder="最小市值(可空)" value={minMktCap ?? ''} onChange={e=>setMinMktCap(e.target.value ? Number(e.target.value) : undefined)} style={{ width: 140 }} />
           <Button type="primary" onClick={()=>mStart.mutate()} loading={mStart.isPending}>开始筛选</Button>
         </Flex>
       }>
-        <Divider />
-        {status !== 'idle' && (
-          <>
-            <Typography.Paragraph type={status==='error'?'danger': status==='success'?'success': undefined}>
-              状态：{status==='running'? '进行中…' : status==='success'? '已完成' : status==='error'? '出错' : status==='timeout'? '超时' : '已停止'}
-            </Typography.Paragraph>
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <Flex gap={12} align="center">
-                <div style={{ width: 90, textAlign: 'right' }}>AI筛选阶段</div>
-                <Progress percent={phasePerc.screen} status={phasePerc.screen>=100? 'success' : 'active'} style={{ width: 280 }} />
-              </Flex>
-              <Flex gap={12} align="center">
-                <div style={{ width: 90, textAlign: 'right' }}>详细分析阶段</div>
-                <Progress percent={phasePerc.analyze} status={phasePerc.analyze>=100? 'success' : 'active'} style={{ width: 280 }} />
-              </Flex>
-              <Flex gap={8} align="center">
-                <div style={{ width: 90, textAlign: 'right' }}>总进度</div>
-                <Progress percent={percent} status={percent>=100? 'success' : 'active'} style={{ width: 240 }} />
-                <Space>
-                  <Button onClick={() => { cancelRef.current = true; setStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
-                  <Button danger onClick={() => { setItems([]); setPercent(0); setPhase(undefined); setPhasePerc({screen:0, analyze:0}); setTaskId(null); setStatus('idle'); try { localStorage.removeItem('kw_rec_tid') } catch {}; message.success('已清空任务') }}>清空任务</Button>
-                </Space>
-              </Flex>
-            </Space>
-            <Divider />
-          </>
-        )}
-        {status==='running' && !items.length && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Card key={i} size="small">
-                <Skeleton active paragraph={{ rows: 3 }} />
+        {status==='running' ? (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Progress percent={percent} status={percent>=100?'success':'active'} format={(p)=>`进度 ${p}%`} />
+            <Flex gap={8}>
+              <Card size="small" title="阶段进度" style={{ flex: 1 }}>
+                <div>筛选：{phasePerc.screen}%</div>
+                <div>分析：{phasePerc.analyze}%</div>
               </Card>
-            ))}
-          </div>
-        )}
-        {items.length > 0 ? (
+              <Card size="small" title="状态" style={{ width: 240 }}>
+                <div>阶段：{phase || '推断中'}</div>
+                <div>任务ID：{taskId}</div>
+              </Card>
+            </Flex>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+              {Array.from({ length: Math.max(3, Math.min(12, Math.ceil((percent||0)/10))) }).map((_, i) => (
+                <Card key={i} size="small">
+                  <Skeleton active paragraph={{ rows: 3 }} />
+                </Card>
+              ))}
+            </div>
+          </Space>
+        ) : status==='success' && items?.length ? (
           <>
             <Typography.Paragraph>共推荐 {items.length} 只股票：</Typography.Paragraph>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
@@ -179,6 +160,11 @@ export default function KeywordRecommendPage() {
                     <div>评分：<b>{it.评分}</b></div>
                     <div>建议：<ActionBadge action={it.建议动作} /></div>
                     <Typography.Paragraph ellipsis={{ rows: 3, expandable: true, symbol: '更多' }}>{it.理由简述}</Typography.Paragraph>
+                    {it.AI详细分析 ? (
+                      <Typography.Paragraph type="secondary" ellipsis={{ rows: 6, expandable: true, symbol: '展开AI分析' }}>
+                        <b>AI详细分析：</b>{it.AI详细分析}
+                      </Typography.Paragraph>
+                    ) : null}
                     <Flex justify="end">
                       <Button size="small" onClick={()=>mAdd.mutate(it.股票代码)} loading={mAdd.isPending}>加入自选</Button>
                     </Flex>

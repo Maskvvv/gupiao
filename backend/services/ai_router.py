@@ -73,9 +73,15 @@ class AIRouter:
 
     def complete(self, req: AIRequest) -> str:
         provider: Provider = req.provider or self.default_provider
+        print(f"正在使用 {provider} 处理请求")
+        print(f"请求参数: prompt={req.prompt}, model={req.model}, temperature={req.temperature}")
+        
         do = {
             "openai": lambda: self._openai_complete(req.prompt, req.model, req.temperature, req.api_key),
             "deepseek": lambda: self._deepseek_complete(req.prompt, req.model, req.temperature, req.api_key),
             "gemini": lambda: self._gemini_complete(req.prompt, req.model, req.temperature, req.api_key),
         }
-        return do.get(provider, lambda: "不支持的AI提供商")()
+        
+        result = do.get(provider, lambda: "不支持的AI提供商")()
+        print(f"处理完成，结果长度: {len(result)}")
+        return result

@@ -15,6 +15,7 @@ export type RecommendItem = {
   评分: number
   建议动作: string
   理由简述: string
+  AI详细分析?: string | null
 }
 
 export async function recommend(config: RecommendConfig = {}) {

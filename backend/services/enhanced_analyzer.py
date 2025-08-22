@@ -67,7 +67,11 @@ class EnhancedAnalyzer:
             "4) 风险点：罗列2-3条主要风险",
             "5) 最终建议：根据权重配置综合各维度，明确给出【买入/持有/卖出】并给出信心(0-10)与一句话理由",
             "",
-            '请用简洁、专业的中文输出，总字数控制在250字以内。最后一行以“最终建议：xxx（信心y/10）| 理由：...”格式收束。',
+            # 新增：强制第一行输出多维摘要，便于前端“理由简述”直接使用
+            "输出格式要求：",
+            "- 第一行：多维摘要：技术面要点；宏观/情绪要点；新闻/事件要点 | 建议：买入/持有/卖出（信心y/10）| 一句话理由",
+            "- 正文：按上述结构展开，总字数控制在250字以内，语言专业精炼",
+            "- 最后一行：最终建议：xxx（信心y/10）| 理由：...",
         ]
         return "\n".join(lines)
     
@@ -140,7 +144,7 @@ class EnhancedAnalyzer:
                     progress_callback and progress_callback(idx + 1, total)
                 except Exception:
                     pass
-                
+        
         return results
     
     def generate_market_report(self, symbols: List[str], weights: Dict[str, float] = None) -> str:
@@ -177,51 +181,7 @@ class EnhancedAnalyzer:
             return self.ai.complete(AIRequest(prompt=prompt))
         except Exception:
             return f"当前市场统计（{weights_desc}）：买入{buy_count}，持有{hold_count}，卖出{sell_count}，平均评分{avg_score:.2f}"
-
-    def get_market_stocks(self, exclude_st: bool = True, min_market_cap: float = None) -> List[str]:
-        """
-        获取A股市场股票列表（用于全市场筛选）
-        
-        Args:
-            exclude_st: 是否排除ST股票
-            min_market_cap: 最小市值筛选（亿元）
-            
-        Returns:
-            股票代码列表
-        """
-        try:
-            import akshare as ak
-            
-            # 获取A股基本信息
-            stock_info = ak.stock_info_a_code_name()
-            
-            if stock_info is None or stock_info.empty:
-                return []
-            
-            codes = stock_info['code'].tolist()
-            
-            # 排除ST股票
-            if exclude_st:
-                names = stock_info['name'].tolist()
-                codes = [code for code, name in zip(codes, names) 
-                        if not any(keyword in name for keyword in ['ST', '*ST', 'PT'])]
-            
-            # 市值筛选（如果需要的话，这里简化处理）
-            if min_market_cap:
-                # 这里可以进一步集成市值数据筛选，暂时返回所有代码
-                pass
-            
-            # 返回前1000只，避免全量处理性能问题
-            return codes[:1000]
-            
-        except Exception as e:
-            print(f"获取市场股票列表失败: {e}")
-            # 返回一些主要指数成分股作为fallback
-            return [
-                "000001", "000002", "000858", "002415", "002594", "300015", "300122",
-                "600000", "600036", "600519", "600887", "601318", "601398", "601888"
-            ]
-            
+    
     def auto_screen_market(self, max_candidates: int = 50, weights: Dict[str, float] = None, ai_params: Dict[str, Any] = None, progress_callback=None) -> List[Dict[str, Any]]:
         """
         全市场自动筛选候选股票
@@ -440,48 +400,99 @@ class EnhancedAnalyzer:
                 filtered_codes.append(code)
         
         return filtered_codes
-    
-    def _fallback_keyword_filter(self, stocks: List[str], keyword: str) -> List[str]:
+
+    def get_market_stocks(self, exclude_st: bool = True, min_market_cap: float = None) -> List[str]:
         """
-        降级策略：基于股票名称的简单关键词匹配筛选
-        """
-        print(f"[DEBUG] 降级策略开始，关键词: {keyword}")
+        获取全市场A股股票代码列表，并可选过滤：
+        - exclude_st: 是否排除 ST/*ST 股票（通过名称包含“ST”判断）
+        - min_market_cap: 最小总市值（单位：亿元）。当无法解析市值时跳过该过滤。
         
+        返回：6位股票代码列表
+        """
         try:
             import akshare as ak
+            import pandas as pd  # 保证本地命名空间有 pd
+        except Exception:
+            # akshare 不可用时直接返回空
+            return []
+
+        codes: List[str] = []
+        try:
+            # 优先使用行情快照（含总市值、名称等）
+            spot = ak.stock_zh_a_spot_em()
+            if spot is not None and not spot.empty:
+                df = spot.copy()
+                # 标准列名（东财接口通常为：代码、名称、总市值、流通市值 等）
+                code_col = "代码" if "代码" in df.columns else ("code" if "code" in df.columns else None)
+                name_col = "名称" if "名称" in df.columns else ("name" if "name" in df.columns else None)
+                mcap_col = None
+                for c in ["总市值", "总市值(元)", "总市值(万元)", "总市值(亿)", "market_cap", "总市值-最新"]:
+                    if c in df.columns:
+                        mcap_col = c
+                        break
+                if code_col is None:
+                    raise ValueError("缺少代码列")
+
+                # 过滤 ST
+                if exclude_st and name_col is not None:
+                    df = df[~df[name_col].astype(str).str.contains("ST", case=False, na=False)]
+
+                # 过滤市值
+                def parse_to_yi(v) -> float:
+                    """将各种格式的总市值转换为“亿元”为单位的浮点值。失败返回 None。"""
+                    if v is None:
+                        return None
+                    try:
+                        # 数字直接按“元”处理
+                        if isinstance(v, (int, float)):
+                            # 如果值很大，默认认为以“元”为单位，转为“亿”
+                            return float(v) / 1e8
+                        s = str(v)
+                        # 处理常见带单位的字符串
+                        if "万亿" in s:
+                            import re
+                            num = float(re.sub(r"[^0-9\.]", "", s))
+                            return num * 10000.0
+                        if "亿" in s:
+                            import re
+                            num = float(re.sub(r"[^0-9\.]", "", s))
+                            return num
+                        # 可能是纯数字字符串（单位元）
+                        f = float(s)
+                        return f / 1e8
+                    except Exception:
+                        return None
+
+                if mcap_col is not None and min_market_cap is not None:
+                    parsed = df[mcap_col].map(parse_to_yi)
+                    df = df[parsed.notna() & (parsed >= float(min_market_cap))]
+
+                codes = [str(c).zfill(6) for c in df[code_col].astype(str).tolist() if str(c).isdigit()]
+                # 去重保持顺序
+                seen = set()
+                codes = [c for c in codes if not (c in seen or seen.add(c))]
+                return codes
+        except Exception as _:
+            # 回退到基础代码-名称接口
+            pass
+
+        # Fallback：仅获取代码与名称（不支持市值过滤）
+        try:
             stock_info = ak.stock_info_a_code_name()
-            code_name_map = dict(zip(stock_info['code'], stock_info['name']))
-            print(f"[DEBUG] 获取到 {len(code_name_map)} 只股票的名称信息")
-            
-            # 基于股票名称进行关键词匹配
-            matched_stocks = []
-            for code in stocks:
-                name = code_name_map.get(code, "")
-                if keyword in name or any(char in name for char in keyword):
-                    matched_stocks.append(code)
-                    print(f"[DEBUG] 匹配到股票: {code}({name})")
-            
-            print(f"[DEBUG] 关键词匹配到 {len(matched_stocks)} 只股票")
-            
-            # 如果匹配到的股票太少，随机补充一些
-            if len(matched_stocks) < 10:
-                import random
-                remaining_stocks = [s for s in stocks if s not in matched_stocks]
-                additional = min(20 - len(matched_stocks), len(remaining_stocks))
-                if additional > 0:
-                    additional_stocks = random.sample(remaining_stocks, additional)
-                    matched_stocks.extend(additional_stocks)
-                    print(f"[DEBUG] 随机补充了 {additional} 只股票")
-            
-            result = matched_stocks[:30]
-            print(f"[DEBUG] 降级策略最终返回 {len(result)} 只股票")
-            return result
-            
-        except Exception as e:
-            print(f"[DEBUG] 降级筛选失败: {e}")
-            # 最后的降级策略：随机返回一部分股票
-            import random
-            sample_size = min(20, len(stocks))
-            result = random.sample(stocks, sample_size)
-            print(f"[DEBUG] 最终降级策略返回 {len(result)} 只随机股票")
-            return result
+            if stock_info is not None and not stock_info.empty:
+                df2 = stock_info.copy()
+                code_col = "code" if "code" in df2.columns else ("代码" if "代码" in df2.columns else None)
+                name_col = "name" if "name" in df2.columns else ("名称" if "名称" in df2.columns else None)
+                if code_col is None:
+                    return []
+                if exclude_st and name_col is not None:
+                    df2 = df2[~df2[name_col].astype(str).str.contains("ST", case=False, na=False)]
+                codes = [str(c).zfill(6) for c in df2[code_col].astype(str).tolist() if str(c).isdigit()]
+                # 去重
+                seen = set()
+                codes = [c for c in codes if not (c in seen or seen.add(c))]
+                return codes
+        except Exception:
+            return []
+
+        return codes

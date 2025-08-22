@@ -60,6 +60,11 @@ export default function RecommendPage() {
                     <div>评分：<b>{it.评分}</b></div>
                     <div>建议：<ActionBadge action={it.建议动作} /></div>
                     <Typography.Paragraph ellipsis={{ rows: 3, expandable: true, symbol: '更多' }}>{it.理由简述}</Typography.Paragraph>
+                    {it.AI详细分析 ? (
+                      <Typography.Paragraph type="secondary" ellipsis={{ rows: 6, expandable: true, symbol: '展开AI分析' }}>
+                        <b>AI详细分析：</b>{it.AI详细分析}
+                      </Typography.Paragraph>
+                    ) : null}
                     <Flex justify="end">
                       <Button size="small" onClick={()=>mAdd.mutate(it.股票代码)} loading={mAdd.isPending}>加入自选</Button>
                     </Flex>
