@@ -777,7 +777,47 @@ def watchlist_list():
     results = []
     with SessionLocal() as db:
         wl = db.query(Watchlist).order_by(Watchlist.created_at.desc()).all()
+        fetcher = DataFetcher()
+        now = datetime.utcnow()
+        # 将天数映射到可用period，避免修改DataFetcher签名
+        days_to_period = lambda d: (
+            "1d" if d <= 1 else
+            "5d" if d <= 5 else
+            "1mo" if d <= 30 else
+            "3mo" if d <= 90 else
+            "6mo" if d <= 180 else
+            "1y" if d <= 365 else
+            "2y" if d <= 730 else
+            "5y"
+        )
         for it in wl:
+            # 兜底：计算区间
+            created_at = it.created_at or now
+            days = max(1, (now - created_at).days)
+            period = days_to_period(days)
+            # 计算累计收益（可能因数据缺失而为空）
+            cum_pct = None
+            cum_amt = None
+            start_price = None
+            last_price = None
+            try:
+                df = fetcher.get_stock_data(it.symbol, period=period)
+                if df is not None and not df.empty:
+                    # Eastmoney列名在DataFetcher中统一为了标题大小写，Close为收盘价
+                    df_sorted = df.sort_index()
+                    # 找到加入日(含)之后的第一根K线；若没有则使用最早一根
+                    target_idx = df_sorted.index[df_sorted.index >= created_at]
+                    first_idx = target_idx[0] if len(target_idx) > 0 else df_sorted.index[0]
+                    start_price = float(df_sorted.loc[first_idx, 'Close']) if 'Close' in df_sorted.columns else None
+                    last_price = float(df_sorted['Close'].iloc[-1]) if 'Close' in df_sorted.columns else None
+                    if start_price and last_price and start_price > 0:
+                        cum_pct = round((last_price / start_price - 1.0) * 100.0, 2)
+                        cum_amt = round(last_price - start_price, 3)
+            except Exception:
+                # 忽略个别股票计算异常，不影响整体
+                pass
+
+            # 最近一次分析记录
             last = db.query(AnalysisRecord).filter(AnalysisRecord.symbol == it.symbol).order_by(AnalysisRecord.created_at.desc()).first()
             results.append({
                 "股票代码": it.symbol,
@@ -785,7 +825,14 @@ def watchlist_list():
                 "综合评分": round(float(last.score), 2) if last and last.score is not None else None,
                 "操作建议": last.action if last else None,
                 "分析理由摘要": (last.reason_brief or "").split("。")[0] + "。" if last and last.reason_brief else None,
-                "最近分析时间": last.created_at.strftime("%Y-%m-%d %H:%M:%S") if last else None
+                "最近分析时间": last.created_at.strftime("%Y-%m-%d %H:%M:%S") if last else None,
+                # 新增字段：加入日期与累计收益
+                "加入日期": created_at.strftime("%Y-%m-%d"),
+                "累计涨跌幅(%)": cum_pct,
+                "累计涨跌额": cum_amt,
+                # 可选调试：起始价/当前价（前端可不展示）
+                "起始价": start_price,
+                "当前价": last_price,
             })
     return {"items": results}
 

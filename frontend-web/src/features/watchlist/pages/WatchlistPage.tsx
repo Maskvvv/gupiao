@@ -1,14 +1,14 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startBatchAnalyze, getBatchStatus, getBatchResult } from '@/api/watchlist'
-import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress } from 'antd'
+import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs } from 'antd'
 import ActionBadge from '@/components/ActionBadge'
 import ReactECharts from 'echarts-for-react'
 
 export default function WatchlistPage() {
   const qc = useQueryClient()
   const { message, modal } = App.useApp()
-  const { data: items = [], isLoading } = useQuery({ queryKey: ['watchlist'], queryFn: listWatchlist })
+  const { data: items = [], isLoading } = useQuery({ queryKey: ['watchlist'], queryFn: listWatchlist, refetchOnWindowFocus: false, retry: 1 })
   const [symbol, setSymbol] = useState('')
   const [openHist, setOpenHist] = useState(false)
   const [histSymbol, setHistSymbol] = useState<string | null>(null)
@@ -21,6 +21,39 @@ export default function WatchlistPage() {
   const [batchItems, setBatchItems] = useState<any[]>([])
   const cancelRef = useRef(false)
   const [batchStatus, setBatchStatus] = useState<'idle'|'running'|'success'|'error'|'timeout'|'stopped'>('idle')
+  const [openQuote, setOpenQuote] = useState(false)
+  const [quoteSymbol, setQuoteSymbol] = useState<string | null>(null)
+  const [chartIdx, setChartIdx] = useState(0)
+  const [isResizing, setIsResizing] = useState(false)
+  const [quoteSize, setQuoteSize] = useState<{ w: number; h: number }>({ w: 1100, h: Math.max(560, Math.round(window.innerHeight * 0.75)) })
+  
+  const handleResizeMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setIsResizing(true)
+    const prevSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = quoteSize.w
+    const startH = quoteSize.h
+    const onMove = (ev: MouseEvent) => {
+      const dw = ev.clientX - startX
+      const dh = ev.clientY - startY
+      setQuoteSize({ w: Math.max(780, startW + dw), h: Math.max(480, startH + dh) })
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setIsResizing(false)
+      document.body.style.userSelect = prevSelect
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  useEffect(() => {
+    if (openQuote && quoteSymbol) setChartIdx(0)
+  }, [openQuote, quoteSymbol])
 
   // 读取高级参数（provider/temperature/api_key），兜底处理异常
   const [provider, setProvider] = useState<string | undefined>(undefined)
@@ -164,18 +197,51 @@ export default function WatchlistPage() {
     { title: '综合评分', dataIndex: '综合评分', width: 100, render: (v: number | null) => v ?? '-' },
     { title: '操作建议', dataIndex: '操作建议', width: 120, render: (v: string | null) => <ActionBadge action={v} /> },
     { title: '理由摘要', dataIndex: '分析理由摘要' },
+    { title: '加入日期', dataIndex: '加入日期', width: 110 },
+    { title: '累计涨跌幅', dataIndex: '累计涨跌幅(%)', width: 110, render: (v: number | null) => {
+      if (v === null || v === undefined || isNaN(Number(v))) return '-'
+      const num = Number(v)
+      const color = num > 0 ? '#16a34a' : (num < 0 ? '#dc2626' : undefined)
+      const sign = num > 0 ? '+' : ''
+      return <span style={{ color }}>{sign}{num.toFixed(2)}%</span>
+    } },
+    { title: '累计涨跌额', dataIndex: '累计涨跌额', width: 110, render: (v: number | null) => {
+      if (v === null || v === undefined || isNaN(Number(v))) return '-'
+      const num = Number(v)
+      const color = num > 0 ? '#16a34a' : (num < 0 ? '#dc2626' : undefined)
+      const sign = num > 0 ? '+' : ''
+      return <span style={{ color }}>{sign}{num.toFixed(2)}</span>
+    } },
     { title: '最近分析时间', dataIndex: '最近分析时间', width: 180 },
     {
-      title: '操作', key: 'ops', width: 220,
+      title: '操作', key: 'ops', width: 280,
       render: (_: any, r: WatchItem) => (
         <Space>
           <Button size="small" onClick={() => mAnalyze.mutate(r.股票代码)} loading={mAnalyze.isPending}>重新分析</Button>
           <Button size="small" onClick={() => { setHistSymbol(r.股票代码); setOpenHist(true); refetchHist() }}>历史</Button>
+          <Button size="small" onClick={() => { setQuoteSymbol(r.股票代码); setOpenQuote(true) }}>行情</Button>
           <Button size="small" danger onClick={() => mRemove.mutate(r.股票代码)} loading={mRemove.isPending}>移除</Button>
         </Space>
       )
     },
   ] as any
+
+  const buildQuoteSources = (sym?: string | null): { name: string; url: string }[] => {
+    if (!sym) return []
+    const raw = (sym || '').trim().toUpperCase()
+    const s = raw.replace(/[^\d]/g, '').slice(0, 6)
+    if (!s) return []
+    return [
+      { name: '百度股市通', url: `https://gushitong.baidu.com/stock/ab-${s}` },
+      { name: '同花顺', url: `https://stockpage.10jqka.com.cn/${s}/` },
+    ]
+  }
+  
+  // 兼容旧调用（默认取第一个）
+  const buildQuoteUrl = (sym?: string | null) => {
+    const s = buildQuoteSources(sym)
+    return s[0]?.url || ''
+  }
 
   return (
     <div className="container">
@@ -293,6 +359,43 @@ export default function WatchlistPage() {
           )}
         </Space>
       </Drawer>
+      <Modal title={`${quoteSymbol || ''} 实时行情`} width={quoteSize.w} open={openQuote} onCancel={() => setOpenQuote(false)} destroyOnHidden footer={null}>
+        {quoteSymbol ? (
+          <div style={{ position: 'relative', height: quoteSize.h, border: '1px solid #eee', display: 'flex', flexDirection: 'column' }}>
+             <div style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0' }}>
+               <Tabs
+                 size="small"
+                 activeKey={String(chartIdx)}
+                 onChange={(k) => setChartIdx(Number(k))}
+                 items={buildQuoteSources(quoteSymbol).map((src, i) => ({ key: String(i), label: src.name }))}
+               />
+             </div>
+             <div style={{ flex: 1 }}>
+               {(() => {
+                 const s = buildQuoteSources(quoteSymbol)
+                 const cur = s[chartIdx] || s[0]
+                 const url = cur ? cur.url : ''
+                 return (
+                   <iframe
+                     src={url}
+                     style={{ width: '100%', height: '100%', border: '0' }}
+                     title="行情"
+                   />
+                 )
+               })()}
+             </div>
+            {isResizing && <div style={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'nwse-resize' }} />}
+            {/* 底部右下角拖拽手柄：可调整弹窗宽高 */}
+            <div
+              onMouseDown={handleResizeMouseDown}
+              title="拖拽调整大小"
+              style={{ position: 'absolute', right: 2, bottom: 2, width: 16, height: 16, cursor: 'nwse-resize', background: '#d9d9d9', borderRadius: 2, zIndex: 30 }}
+            />
+           </div>
+         ) : (
+           <Typography.Text type="secondary">请选择一只股票查看</Typography.Text>
+         )}
+      </Modal>
     </div>
   )
 }

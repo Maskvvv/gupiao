@@ -73,6 +73,7 @@ class AIRouter:
 
     def complete(self, req: AIRequest) -> str:
         provider: Provider = req.provider or self.default_provider
+        print(f"--------------------------------------------------------------------")
         print(f"正在使用 {provider} 处理请求")
         print(f"请求参数: prompt={req.prompt}, model={req.model}, temperature={req.temperature}")
         
@@ -83,5 +84,6 @@ class AIRouter:
         }
         
         result = do.get(provider, lambda: "不支持的AI提供商")()
-        print(f"处理完成，结果长度: {len(result)}")
+        print(f"处理完成，结果长度: {result}")
+        print(f"--------------------------------------------------------------------")
         return result

@@ -7,6 +7,9 @@ export type WatchItem = {
   操作建议?: string | null
   分析理由摘要?: string | null
   最近分析时间?: string | null
+  加入日期?: string | null
+  '累计涨跌幅(%)'?: number | null
+  累计涨跌额?: number | null
 }
 
 export async function listWatchlist() {
