@@ -1,9 +1,10 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startBatchAnalyze, getBatchStatus, getBatchResult } from '@/api/watchlist'
-import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs } from 'antd'
+import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs, Dropdown } from 'antd'
 import ActionBadge from '@/components/ActionBadge'
 import ReactECharts from 'echarts-for-react'
+import { DownOutlined } from '@ant-design/icons'
 
 export default function WatchlistPage() {
   const qc = useQueryClient()
@@ -26,7 +27,10 @@ export default function WatchlistPage() {
   const [chartIdx, setChartIdx] = useState(0)
   const [isResizing, setIsResizing] = useState(false)
   const [quoteSize, setQuoteSize] = useState<{ w: number; h: number }>({ w: 1100, h: Math.max(560, Math.round(window.innerHeight * 0.75)) })
-  
+  const [vw, setVw] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1200)
+  // 理由详情弹窗
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailText, setDetailText] = useState<string>('')
   const handleResizeMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault()
     setIsResizing(true)
@@ -54,6 +58,13 @@ export default function WatchlistPage() {
   useEffect(() => {
     if (openQuote && quoteSymbol) setChartIdx(0)
   }, [openQuote, quoteSymbol])
+
+  // 监听窗口尺寸变化，保证弹窗宽度在小屏不溢出
+  useEffect(() => {
+    const onResize = () => setVw(typeof window !== 'undefined' ? window.innerWidth : 1200)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   // 读取高级参数（provider/temperature/api_key），兜底处理异常
   const [provider, setProvider] = useState<string | undefined>(undefined)
@@ -196,32 +207,62 @@ export default function WatchlistPage() {
     { title: '股票名称', dataIndex: '股票名称', width: 140 },
     { title: '综合评分', dataIndex: '综合评分', width: 100, render: (v: number | null) => v ?? '-' },
     { title: '操作建议', dataIndex: '操作建议', width: 120, render: (v: string | null) => <ActionBadge action={v} /> },
-    { title: '理由摘要', dataIndex: '分析理由摘要' },
+    {
+      title: '理由摘要',
+      dataIndex: '分析理由摘要',
+      width: 300,
+      render: (text: string | null) => {
+        const t = (text ?? '').trim()
+        const clickable = !!t
+        return (
+          <Typography.Paragraph
+            style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
+            ellipsis={{ tooltip: t || undefined }}
+            onClick={() => clickable && (setDetailText(t), setDetailOpen(true))}
+          >
+            {t || '-'}
+          </Typography.Paragraph>
+        )
+      }
+    },
     { title: '加入日期', dataIndex: '加入日期', width: 110 },
     { title: '累计涨跌幅', dataIndex: '累计涨跌幅(%)', width: 110, render: (v: number | null) => {
       if (v === null || v === undefined || isNaN(Number(v))) return '-'
       const num = Number(v)
-      const color = num > 0 ? '#16a34a' : (num < 0 ? '#dc2626' : undefined)
+      const color = num > 0 ? '#cf1322' : (num < 0 ? '#52c41a' : undefined)
       const sign = num > 0 ? '+' : ''
       return <span style={{ color }}>{sign}{num.toFixed(2)}%</span>
     } },
     { title: '累计涨跌额', dataIndex: '累计涨跌额', width: 110, render: (v: number | null) => {
       if (v === null || v === undefined || isNaN(Number(v))) return '-'
       const num = Number(v)
-      const color = num > 0 ? '#16a34a' : (num < 0 ? '#dc2626' : undefined)
+      const color = num > 0 ? '#cf1322' : (num < 0 ? '#52c41a' : undefined)
       const sign = num > 0 ? '+' : ''
       return <span style={{ color }}>{sign}{num.toFixed(2)}</span>
     } },
     { title: '最近分析时间', dataIndex: '最近分析时间', width: 180 },
     {
-      title: '操作', key: 'ops', width: 280,
+      title: '操作', key: 'ops', width: 140,
       render: (_: any, r: WatchItem) => (
-        <Space>
-          <Button size="small" onClick={() => mAnalyze.mutate(r.股票代码)} loading={mAnalyze.isPending}>重新分析</Button>
-          <Button size="small" onClick={() => { setHistSymbol(r.股票代码); setOpenHist(true); refetchHist() }}>历史</Button>
-          <Button size="small" onClick={() => { setQuoteSymbol(r.股票代码); setOpenQuote(true) }}>行情</Button>
-          <Button size="small" danger onClick={() => mRemove.mutate(r.股票代码)} loading={mRemove.isPending}>移除</Button>
-        </Space>
+        <Dropdown
+          menu={{
+            items: [
+              { key: 'analyze', label: '重新分析' },
+              { key: 'history', label: '历史' },
+              { key: 'quote', label: '行情' },
+              { type: 'divider' as const },
+              { key: 'remove', label: <span style={{ color: '#cf1322' }}>移除</span> },
+            ],
+            onClick: ({ key }) => (
+              key === 'analyze' ? mAnalyze.mutate(r.股票代码) :
+              key === 'history' ? (setHistSymbol(r.股票代码), setOpenHist(true), refetchHist()) :
+              key === 'quote' ? (setQuoteSymbol(r.股票代码), setOpenQuote(true)) :
+              key === 'remove' ? mRemove.mutate(r.股票代码) : null
+            )
+          }}
+        >
+          <Button size="small">操作 <DownOutlined /></Button>
+        </Dropdown>
       )
     },
   ] as any
@@ -277,18 +318,21 @@ export default function WatchlistPage() {
              批量分析{selected.length ? `（${selected.length}）` : ''}
           </Button>
          </Flex>
- 
-         <Table
-           size="small"
-           rowKey={(r: WatchItem) => r.股票代码}
-           rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as string[]) }}
-           dataSource={items}
-           columns={columns}
-           loading={isLoading}
-           pagination={false}
-           locale={{ emptyText: '暂无自选股票，先添加一只吧～' }}
-         />
-      </Card>
+
+        <div className="table-responsive">
+          <Table
+            size="small"
+            rowKey={(r: WatchItem) => r.股票代码}
+            rowSelection={{ selectedRowKeys: selected, onChange: (keys: React.Key[]) => setSelected(keys as string[]) }}
+            dataSource={items}
+            columns={columns}
+            loading={isLoading}
+            pagination={false}
+            locale={{ emptyText: '暂无自选股票，先添加一只吧～' }}
+            scroll={{ x: 'max-content' }}
+          />
+        </div>
+       </Card>
 
       <Drawer title={`${histSymbol || ''} 历史分析`} width={720} open={openHist} onClose={() => setOpenHist(false)} destroyOnClose>
         {fetchingHist ? '加载中...' : (
@@ -307,7 +351,23 @@ export default function WatchlistPage() {
                 { title: '时间', dataIndex: '时间', key: 't', width: 180 },
                 { title: '评分', dataIndex: '综合评分', key: 's', width: 80 },
                 { title: '建议', dataIndex: '操作建议', key: 'a', width: 120, render: (v: any) => <ActionBadge action={v} /> },
-                { title: '理由摘要', dataIndex: '分析理由摘要', key: 'b' },
+                // removed duplicate: 理由摘要 ellipsis-only column
+                {
+                  title: '理由摘要', dataIndex: '分析理由摘要', key: 'b', width: 300,
+                  render: (text: string | null) => {
+                    const t = (text ?? '').trim()
+                    const clickable = !!t
+                    return (
+                      <Typography.Paragraph
+                        style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
+                        ellipsis={{ tooltip: t || undefined }}
+                        onClick={() => clickable && (setDetailText(t), setDetailOpen(true))}
+                      >
+                        {t || '-'}
+                      </Typography.Paragraph>
+                    )
+                  }
+                },
               ] as any}
               pagination={false}
             />
@@ -325,7 +385,7 @@ export default function WatchlistPage() {
       </Drawer>
 
       <Drawer title="批量分析" width={720} open={batchOpen} onClose={() => { cancelRef.current = true; setBatchOpen(false); /* 不清除 taskId/localStorage，便于后续恢复 */ }} destroyOnClose>
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           {batchStatus !== 'idle' && (
             <>
               <Typography.Paragraph type={batchStatus==='error'?'danger': batchStatus==='success'?'success': undefined}>
@@ -349,7 +409,22 @@ export default function WatchlistPage() {
                 { title: '股票名称', dataIndex: '股票名称', width: 140 },
                 { title: '评分', dataIndex: '评分', width: 80 },
                 { title: '建议动作', dataIndex: '建议动作', width: 120, render: (v: any) => <ActionBadge action={v} /> },
-                { title: '理由简述', dataIndex: '理由简述' },
+                {
+                  title: '理由简述', dataIndex: '理由简述', width: 300,
+                  render: (text: string | null) => {
+                    const t = (text ?? '').trim()
+                    const clickable = !!t
+                    return (
+                      <Typography.Paragraph
+                        style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
+                        ellipsis={{ tooltip: t || undefined }}
+                        onClick={() => clickable && (setDetailText(t), setDetailOpen(true))}
+                      >
+                        {t || '-'}
+                      </Typography.Paragraph>
+                    )
+                  }
+                },
                 { title: '错误', dataIndex: '错误', width: 160 },
               ] as any}
               pagination={false}
@@ -359,7 +434,13 @@ export default function WatchlistPage() {
           )}
         </Space>
       </Drawer>
-      <Modal title={`${quoteSymbol || ''} 实时行情`} width={quoteSize.w} open={openQuote} onCancel={() => setOpenQuote(false)} destroyOnHidden footer={null}>
+      {/* 理由详情弹窗 */}
+      <Modal title="理由详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={640}>
+        <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+          {detailText || '-'}
+        </Typography.Paragraph>
+      </Modal>
+       <Modal title={`${quoteSymbol || ''} 实时行情`} width={Math.min(quoteSize.w, Math.max(320, vw - 24))} open={openQuote} onCancel={() => setOpenQuote(false)} destroyOnHidden footer={null}>
         {quoteSymbol ? (
           <div style={{ position: 'relative', height: quoteSize.h, border: '1px solid #eee', display: 'flex', flexDirection: 'column' }}>
              <div style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0' }}>

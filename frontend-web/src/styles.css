@@ -5,7 +5,19 @@ html, body, #root { height: 100%; }
 /* 响应式容器 */
 .container { max-width: 1200px; margin: 0 auto; padding: 0 12px; }
 
+/* 表格在小屏横向滚动，避免溢出 */
+.table-responsive { width: 100%; overflow-x: auto; overflow-y: hidden; }
+.table-responsive .ant-table { min-width: 720px; }
+
 /* 移动端优化 */
 @media (max-width: 768px) {
   .hide-sm { display: none; }
+  .container { padding: 0 8px; }
+  .table-responsive .ant-table { min-width: 640px; }
+}
+
+/* 极小屏优化 */
+@media (max-width: 480px) {
+  .container { padding: 0 6px; }
+  .table-responsive .ant-table { min-width: 560px; }
 }
