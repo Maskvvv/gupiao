@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Button, Card, Divider, Flex, Input, Space, Typography, message, Skeleton } from 'antd'
+import { App, Button, Card, Divider, Flex, Input, Space, Typography, Skeleton } from 'antd'
 import { recommend, type RecommendItem } from '@/api/recommend'
 import ActionBadge from '@/components/ActionBadge'
 import { useEffect, useState } from 'react'
@@ -10,6 +10,7 @@ export default function RecommendPage() {
   const [provider, setProvider] = useState<string | undefined>(undefined)
   const [temperature, setTemperature] = useState<number | undefined>(undefined)
   const [apiKey, setApiKey] = useState<string | undefined>(undefined)
+  const { message } = App.useApp()
   const qc = useQueryClient()
   const m = useMutation({
     mutationFn: () => recommend({ symbols: symbols.split(',').map(s=>s.trim()).filter(Boolean), provider, temperature, api_key: apiKey }),

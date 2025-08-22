@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Slider, Space, Switch, Typography, message } from 'antd'
+import { App, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Slider, Space, Switch, Typography } from 'antd'
 
 // 本地存储键
 const LS_KEY = 'advanced_params'
@@ -24,6 +24,7 @@ function useThrottledSaver(delay = 400) {
 }
 
 export default function AdvancedSettingsPage() {
+  const { message } = App.useApp()
   const [form] = Form.useForm()
   const save = useThrottledSaver(400)
   const [loaded, setLoaded] = useState(false)

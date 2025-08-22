@@ -1,12 +1,13 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startBatchAnalyze, getBatchStatus, getBatchResult } from '@/api/watchlist'
-import { Button, Card, Flex, Input, message, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal } from 'antd'
+import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress } from 'antd'
 import ActionBadge from '@/components/ActionBadge'
 import ReactECharts from 'echarts-for-react'
 
 export default function WatchlistPage() {
   const qc = useQueryClient()
+  const { message, modal } = App.useApp()
   const { data: items = [], isLoading } = useQuery({ queryKey: ['watchlist'], queryFn: listWatchlist })
   const [symbol, setSymbol] = useState('')
   const [openHist, setOpenHist] = useState(false)
@@ -193,7 +194,7 @@ export default function WatchlistPage() {
             onClick={() => {
               if (!items || items.length === 0) { message.info('暂无自选股票可分析'); return }
               if (selected.length === 0) {
-                Modal.confirm({
+                modal.confirm({
                   title: '确认分析全部自选股票？',
                   content: '未选择任何股票，将默认分析当前全部自选列表。',
                   okText: '开始分析',

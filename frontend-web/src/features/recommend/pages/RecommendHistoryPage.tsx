@@ -1,11 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Button, Card, DatePicker, Flex, Modal, Pagination, Space, Table, Tag, message, Popconfirm, Segmented } from 'antd'
+import { App, Button, Card, DatePicker, Flex, Pagination, Space, Table, Tag, Popconfirm, Segmented } from 'antd'
 import dayjs from 'dayjs'
 import { deleteRecommend, getRecommendDetails, getRecommendHistory } from '@/api/recommend'
 import { useState } from 'react'
 
 export default function RecommendHistoryPage() {
   const qc = useQueryClient()
+  const { message, modal } = App.useApp()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null)
@@ -67,7 +68,7 @@ export default function RecommendHistoryPage() {
                   <Button size="small" onClick={async ()=>{
                     try {
                       const d = await getRecommendDetails(r.id)
-                      Modal.info({ title: `记录 ${d.id} 详情`, width: 720, content: (
+                      modal.info({ title: `记录 ${d.id} 详情`, width: 720, content: (
                         <div style={{ maxHeight: 480, overflow: 'auto' }}>
                           {d.items?.map((it:any)=> (
                             <div key={it.股票代码} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>

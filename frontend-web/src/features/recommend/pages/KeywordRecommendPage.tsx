@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Divider, Flex, Input, Space, Typography, message, Progress, Skeleton, InputNumber } from 'antd'
+import { App, Button, Card, Divider, Flex, Input, Space, Typography, Progress, Skeleton, InputNumber } from 'antd'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { addWatch } from '@/api/watchlist'
 import ActionBadge from '@/components/ActionBadge'
-import { startKeywordRecommend, getKeywordStatus, getKeywordResult, type KeywordStartPayload } from '@/api/recommend'
+import { startKeywordRecommend, getKeywordStatus, getKeywordResult, type KeywordStartPayload, type KeywordTaskStatus } from '@/api/recommend'
 
 export default function KeywordRecommendPage() {
   const qc = useQueryClient()
+  const { message } = App.useApp()
   const [keyword, setKeyword] = useState('')
   const [period, setPeriod] = useState('1y')
   const [maxCandidates, setMaxCandidates] = useState<number>(5)
@@ -18,6 +19,8 @@ export default function KeywordRecommendPage() {
 
   const [taskId, setTaskId] = useState<string | null>(null)
   const [percent, setPercent] = useState(0)
+  const [phase, setPhase] = useState<'screen'|'analyze'|'done'|undefined>(undefined)
+  const [phasePerc, setPhasePerc] = useState<{screen:number; analyze:number}>({ screen: 0, analyze: 0 })
   const [status, setStatus] = useState<'idle'|'running'|'success'|'error'|'timeout'|'stopped'>('idle')
   const [items, setItems] = useState<any[]>([])
   const cancelRef = useRef(false)
@@ -49,12 +52,22 @@ export default function KeywordRecommendPage() {
       if (!tid) { message.error('未获得任务ID'); return }
       setItems([])
       setPercent(0)
+      setPhase(undefined)
+      setPhasePerc({ screen: 0, analyze: 0 })
       setTaskId(tid)
       setStatus('running')
       try { localStorage.setItem('kw_rec_tid', String(tid)) } catch {}
     },
     onError: (e: any) => message.error(e?.message || '启动失败'),
   })
+
+  // 推断阶段进度（后端未返回 phases 时的兜底）
+  const inferPhases = (p: number): {screen:number; analyze:number} => {
+    const pct = Math.max(0, Math.min(100, p))
+    if (pct <= 50) return { screen: pct * 2, analyze: 0 }
+    const analyze = Math.min(100, (pct - 50) * 2)
+    return { screen: 100, analyze }
+  }
 
   // 轮询任务进度和结果，设置超时、错误兜底
   async function pollKeywordTask(tid: string) {
@@ -63,10 +76,18 @@ export default function KeywordRecommendPage() {
     try {
       const startAt = Date.now()
       while (!cancelRef.current) {
-        const s = await getKeywordStatus(tid)
+        const s = await getKeywordStatus(tid) as KeywordTaskStatus
         if ((s as any)?.status === 'not_found') { message.warning('任务不存在或已过期'); setStatus('error'); break }
         const p = (s as any)?.percent
         if (typeof p === 'number') setPercent(Math.max(0, Math.min(100, p)))
+        const phases = (s as any)?.phases as {screen?:number; analyze?:number} | undefined
+        const ph = (s as any)?.phase as 'screen'|'analyze'|'done'|undefined
+        setPhase(ph)
+        if (phases && (typeof phases.screen === 'number' || typeof phases.analyze === 'number')) {
+          setPhasePerc({ screen: Math.max(0, Math.min(100, phases.screen || 0)), analyze: Math.max(0, Math.min(100, phases.analyze || 0)) })
+        } else if (typeof p === 'number') {
+          setPhasePerc(inferPhases(p))
+        }
         if ((s as any)?.status === 'done' || (s as any)?.status === 'error') break
         if (Date.now() - startAt > 120000) { message.warning('轮询超时，已停止'); setStatus('timeout'); cancelRef.current = true; break }
         await new Promise(r => setTimeout(r, 600))
@@ -118,13 +139,24 @@ export default function KeywordRecommendPage() {
             <Typography.Paragraph type={status==='error'?'danger': status==='success'?'success': undefined}>
               状态：{status==='running'? '进行中…' : status==='success'? '已完成' : status==='error'? '出错' : status==='timeout'? '超时' : '已停止'}
             </Typography.Paragraph>
-            <Flex gap={8} align="center">
-              <Progress percent={percent} status={percent>=100? 'success' : 'active'} style={{ width: 240 }} />
-              <Space>
-                <Button onClick={() => { cancelRef.current = true; setStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
-                <Button danger onClick={() => { setItems([]); setPercent(0); setTaskId(null); setStatus('idle'); try { localStorage.removeItem('kw_rec_tid') } catch {}; message.success('已清空任务') }}>清空任务</Button>
-              </Space>
-            </Flex>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Flex gap={12} align="center">
+                <div style={{ width: 90, textAlign: 'right' }}>AI筛选阶段</div>
+                <Progress percent={phasePerc.screen} status={phasePerc.screen>=100? 'success' : 'active'} style={{ width: 280 }} />
+              </Flex>
+              <Flex gap={12} align="center">
+                <div style={{ width: 90, textAlign: 'right' }}>详细分析阶段</div>
+                <Progress percent={phasePerc.analyze} status={phasePerc.analyze>=100? 'success' : 'active'} style={{ width: 280 }} />
+              </Flex>
+              <Flex gap={8} align="center">
+                <div style={{ width: 90, textAlign: 'right' }}>总进度</div>
+                <Progress percent={percent} status={percent>=100? 'success' : 'active'} style={{ width: 240 }} />
+                <Space>
+                  <Button onClick={() => { cancelRef.current = true; setStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
+                  <Button danger onClick={() => { setItems([]); setPercent(0); setPhase(undefined); setPhasePerc({screen:0, analyze:0}); setTaskId(null); setStatus('idle'); try { localStorage.removeItem('kw_rec_tid') } catch {}; message.success('已清空任务') }}>清空任务</Button>
+                </Space>
+              </Flex>
+            </Space>
             <Divider />
           </>
         )}

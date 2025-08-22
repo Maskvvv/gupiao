@@ -7,6 +7,7 @@ from .services.ai_router import AIRouter, AIRequest
 from .services.enhanced_analyzer import EnhancedAnalyzer
 
 import os
+import time
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -406,7 +407,7 @@ def recommend_start(req: RecommendationRequest):
                         period=req_obj.period,
                         total_candidates=len(candidates),
                         top_n=top_n,
-                        weights_config=json.dumps(req_obj.weights) if req.weights else None,
+                        weights_config=json.dumps(req.weights) if req.weights else None,
                         recommend_type="manual"
                     )
                     db.add(rec)
@@ -578,11 +579,15 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
         "status": "running",
         "done": 0,
         "total": 0,
-        "percent": 0
+        "percent": 0,
+        # 新增阶段性进度
+        "phase": "screen",  # screen | analyze | done
+        "phases": {"screen": 0, "analyze": 0},
     }
     
     def worker(req_obj, task):
         try:
+            print(f"[KW-Task] start task={task} keyword={req_obj.keyword!r} period={req_obj.period} max={req_obj.max_candidates} exclude_st={req_obj.exclude_st} min_cap={req_obj.min_market_cap} provider={req_obj.provider}")
             analyzer = EnhancedAnalyzer()
             fetcher = DataFetcher()
             ai_params = {
@@ -592,14 +597,34 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
             }
             
             def progress_callback(done, total):
-                percent = int((done / total) * 100) if total > 0 else 0
+                # 将 analyzer.keyword_screen_market 的 0..2 / 2 进度拆分为两阶段
+                # done: 0 => 刚开始，1 => 第一阶段完成，(1,2) => 第二阶段进度，2 => 全部完成
+                overall_percent = int((done / max(total, 1)) * 100) if total > 0 else 0
+                if done < 1:
+                    phase = "screen"
+                    screen_p = 0 if done <= 0 else int(done * 100)  # 理论上只有0
+                    analyze_p = 0
+                elif 1 <= done < 2:
+                    phase = "analyze"
+                    screen_p = 100
+                    analyze_p = int(max(0.0, min(1.0, done - 1.0)) * 100)
+                else:
+                    phase = "done"
+                    screen_p = 100
+                    analyze_p = 100
                 PROGRESS_STORE[task].update({
                     "done": done,
                     "total": total,
-                    "percent": percent
+                    "percent": overall_percent,
+                    "phase": phase,
+                    "phases": {"screen": screen_p, "analyze": analyze_p},
                 })
+                # 关键节点日志
+                if done in (0, 1, 2):
+                    print(f"[KW-Task] progress task={task} phase={phase} overall={overall_percent}% screen={screen_p}% analyze={analyze_p}%")
             
-            # 调用关键词筛选方法（返回的是分析结果列表，每项包含 symbol、score、action、ai_advice 等）
+            # 调用关键词筛选方法
+            t0 = time.time()
             analyses = analyzer.keyword_screen_market(
                 keyword=req_obj.keyword,
                 period=req_obj.period,
@@ -610,6 +635,8 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
                 progress_callback=progress_callback,
                 ai_params=ai_params
             )
+            t1 = time.time()
+            print(f"[KW-Task] analyzer finished task={task} results={len(analyses)} elapsed={t1-t0:.2f}s")
             
             # 将分析结果映射为统一的候选结构（中文字段），以便前端展示与持久化
             candidates = []
@@ -629,11 +656,12 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
                         "_ai_advice": ai_text,
                     })
             
-            # 排序与Top-N（默认返回5只，可通过max_candidates配置）
+            # 排序与Top-N
             candidates.sort(key=lambda x: x["评分"], reverse=True)
             desired = int(req_obj.max_candidates or 5)
             top_list = candidates[:desired]
             filtered_count = len(candidates)
+            print(f"[KW-Task] mapped candidates task={task} filtered={filtered_count} top={len(top_list)}")
             
             # 保存推荐结果
             rec_id = None
@@ -668,14 +696,18 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
             
             PROGRESS_STORE[task].update({
                 "status": "done",
+                "phase": "done",
+                "phases": {"screen": 100, "analyze": 100},
                 "result": {
                     "recommendations": top_list,
                     "rec_id": rec_id,
                     "filtered_count": filtered_count
                 }
             })
+            print(f"[KW-Task] done task={task}")
         except Exception as e:
             PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
+            print(f"[KW-Task] error task={task} error={e}")
     
     threading.Thread(target=worker, args=(req, task_id), daemon=True).start()
     return {"task_id": task_id}
@@ -689,7 +721,10 @@ def recommend_keyword_status(task_id: str):
         "status": info.get("status"),
         "done": info.get("done", 0),
         "total": info.get("total", 0),
-        "percent": info.get("percent", 0)
+        "percent": info.get("percent", 0),
+        # 新增阶段性进度返回
+        "phase": info.get("phase"),
+        "phases": info.get("phases", {"screen": 0, "analyze": 0}),
     }
 
 @router.get("/recommend/keyword/result/{task_id}")

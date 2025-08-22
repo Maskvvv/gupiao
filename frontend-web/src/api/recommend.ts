@@ -61,7 +61,10 @@ export type KeywordStartPayload = {
   api_key?: string
 }
 
-export type KeywordTaskStatus = { status: string; done: number; total: number; percent: number } | { status: 'not_found' }
+export type KeywordTaskPhases = { screen: number; analyze: number }
+export type KeywordTaskStatus = (
+  { status: string; done: number; total: number; percent: number; phase?: 'screen'|'analyze'|'done'; phases?: KeywordTaskPhases }
+) | { status: 'not_found' }
 export type KeywordTaskResult = ({ recommendations: RecommendItem[]; rec_id?: number; filtered_count?: number }) | { status: string } | { error: string }
 
 export async function startKeywordRecommend(payload: KeywordStartPayload) {
