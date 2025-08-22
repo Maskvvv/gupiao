@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory } from '@/api/watchlist'
-import { Button, Card, Flex, Input, message, Space, Table, Typography, Drawer, Pagination, Divider } from 'antd'
+import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startBatchAnalyze, getBatchStatus, getBatchResult } from '@/api/watchlist'
+import { Button, Card, Flex, Input, message, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal } from 'antd'
 import ActionBadge from '@/components/ActionBadge'
 import ReactECharts from 'echarts-for-react'
 
@@ -13,6 +13,13 @@ export default function WatchlistPage() {
   const [histSymbol, setHistSymbol] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [selected, setSelected] = useState<string[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [taskId, setTaskId] = useState<string | null>(null)
+  const [percent, setPercent] = useState(0)
+  const [batchItems, setBatchItems] = useState<any[]>([])
+  const cancelRef = useRef(false)
+  const [batchStatus, setBatchStatus] = useState<'idle'|'running'|'success'|'error'|'timeout'|'stopped'>('idle')
 
   const { data: hist, refetch: refetchHist, isFetching: fetchingHist } = useQuery({
     queryKey: ['history', histSymbol, page, pageSize],
@@ -52,6 +59,76 @@ export default function WatchlistPage() {
     onError: (e: any) => message.error(e.message || '分析失败'),
   })
 
+  const mBatchStart = useMutation({
+    mutationFn: async (symbols: string[] | undefined) => {
+      const payload: any = { symbols: symbols && symbols.length ? symbols : undefined }
+      const r = await startBatchAnalyze(payload)
+      return r.task_id
+    },
+    onSuccess: (tid) => {
+      if (!tid) { message.error('未获得任务ID'); return }
+      setBatchItems([])
+      setPercent(0)
+      setTaskId(tid)
+      setBatchOpen(true)
+      setBatchStatus('running')
+      try { localStorage.setItem('watch_batch_tid', String(tid)) } catch {}
+    },
+    onError: (e: any) => message.error(e?.message || '批量分析启动失败'),
+  })
+
+  async function pollBatch(tid: string) {
+    cancelRef.current = false
+    setBatchStatus('running')
+    try {
+      const startAt = Date.now()
+      // 轮询进度
+      while (!cancelRef.current) {
+        const s = await getBatchStatus(tid)
+        if (s?.status === 'not_found') { message.warning('任务不存在或已过期'); setBatchStatus('error'); break }
+        if (typeof s?.percent === 'number') setPercent(Math.max(0, Math.min(100, s.percent)))
+        if (s?.status === 'done' || s?.status === 'error') break
+        if (Date.now() - startAt > 120000) { message.warning('轮询超时，已停止'); setBatchStatus('timeout'); cancelRef.current = true; break }
+        await new Promise(r => setTimeout(r, 600))
+      }
+      // 获取结果
+      if (!cancelRef.current) {
+        const res = await getBatchResult(tid)
+        if ((res as any)?.error) {
+          message.error(`任务失败：${(res as any).error}`)
+          setBatchStatus('error')
+        } else if (res && Array.isArray(res.items) && res.items.length) {
+          setBatchItems(res.items)
+          message.success('批量分析完成')
+          setBatchStatus('success')
+          qc.invalidateQueries({ queryKey: ['watchlist'] })
+        } else {
+          message.info('批量任务无结果返回')
+          setBatchStatus('success')
+        }
+        try { localStorage.removeItem('watch_batch_tid') } catch {}
+      }
+    } catch (e: any) {
+      message.error(e?.message || '轮询失败')
+      setBatchStatus('error')
+    }
+  }
+
+  useEffect(() => {
+    if (taskId) {
+      pollBatch(taskId)
+    }
+    return () => { cancelRef.current = true }
+  }, [taskId])
+
+  // 页面刷新后尝试恢复批量任务
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('watch_batch_tid')
+      if (saved) { setTaskId(saved); setBatchOpen(true); setBatchStatus('running') }
+    } catch {}
+  }, [])
+
   const columns = [
     { title: '股票代码', dataIndex: '股票代码', width: 120 },
     { title: '股票名称', dataIndex: '股票名称', width: 140 },
@@ -84,17 +161,38 @@ export default function WatchlistPage() {
             allowClear
           />
           <Button type="primary" onClick={() => symbol.trim() && mAdd.mutate(symbol)} loading={mAdd.isPending}>加入自选</Button>
-        </Flex>
-
-        <Table
-          size="small"
-          rowKey={(r: WatchItem) => r.股票代码}
-          dataSource={items}
-          columns={columns}
-          loading={isLoading}
-          pagination={false}
-          locale={{ emptyText: '暂无自选股票，先添加一只吧～' }}
-        />
+          <Button
+            onClick={() => {
+              if (!items || items.length === 0) { message.info('暂无自选股票可分析'); return }
+              if (selected.length === 0) {
+                Modal.confirm({
+                  title: '确认分析全部自选股票？',
+                  content: '未选择任何股票，将默认分析当前全部自选列表。',
+                  okText: '开始分析',
+                  cancelText: '取消',
+                  onOk: () => mBatchStart.mutate(undefined),
+                })
+              } else {
+                mBatchStart.mutate(selected)
+              }
+            }}
+            disabled={!items || items.length === 0 || !!taskId}
+            loading={mBatchStart.isPending}
+          >
+             批量分析{selected.length ? `（${selected.length}）` : ''}
+          </Button>
+         </Flex>
+ 
+         <Table
+           size="small"
+           rowKey={(r: WatchItem) => r.股票代码}
+           rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as string[]) }}
+           dataSource={items}
+           columns={columns}
+           loading={isLoading}
+           pagination={false}
+           locale={{ emptyText: '暂无自选股票，先添加一只吧～' }}
+         />
       </Card>
 
       <Drawer title={`${histSymbol || ''} 历史分析`} width={720} open={openHist} onClose={() => setOpenHist(false)} destroyOnClose>
@@ -130,6 +228,42 @@ export default function WatchlistPage() {
           </>
         )}
       </Drawer>
+
+      <Drawer title="批量分析" width={720} open={batchOpen} onClose={() => { cancelRef.current = true; setBatchOpen(false); /* 不清除 taskId/localStorage，便于后续恢复 */ }} destroyOnClose>
+        <Flex vertical gap={8}>
+          <div>
+            <Typography.Text type="secondary">未选择股票将默认分析全部自选</Typography.Text>
+          </div>
+          {batchStatus !== 'idle' && (
+            <Typography.Paragraph type={batchStatus==='error'?'danger': batchStatus==='success'?'success': undefined}>
+              状态：{batchStatus === 'running' ? '分析中…' : batchStatus === 'success' ? '已完成' : batchStatus === 'error' ? '出错' : batchStatus === 'timeout' ? '超时' : '已停止'}
+            </Typography.Paragraph>
+          )}
+          <Progress percent={percent} status={percent>=100? 'success' : 'active'} />
+          <Space>
+            <Button onClick={() => { cancelRef.current = true; setBatchStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
+            <Button danger onClick={() => { setBatchItems([]); setPercent(0); setTaskId(null); setBatchStatus('idle'); try { localStorage.removeItem('watch_batch_tid') } catch {}; message.success('已清空任务状态') }}>清空任务</Button>
+          </Space>
+           {batchItems && batchItems.length > 0 ? (
+             <Table
+               size="small"
+               rowKey={(r: any, idx: number) => String(r.股票代码 || idx)}
+               dataSource={batchItems}
+               columns={[
+                 { title: '股票代码', dataIndex: '股票代码', width: 120 },
+                 { title: '股票名称', dataIndex: '股票名称', width: 140 },
+                 { title: '评分', dataIndex: '评分', width: 80 },
+                 { title: '建议', dataIndex: '建议动作', width: 120, render: (_: any, r: any) => <ActionBadge action={r?.建议动作 || r?.操作建议} /> },
+                 { title: '理由摘要', dataIndex: '理由简述', render: (_: any, r: any) => r?.理由简述 || r?.分析理由摘要 || '-' },
+                 { title: '错误', dataIndex: '错误', width: 160 },
+               ] as any}
+               pagination={false}
+             />
+           ) : (
+             <Typography.Text type="secondary">等待结果返回…</Typography.Text>
+           )}
+         </Flex>
+       </Drawer>
     </div>
   )
 }

@@ -2,14 +2,17 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button, Card, Divider, Flex, Input, Space, Typography, message, Skeleton } from 'antd'
 import { recommend, type RecommendItem } from '@/api/recommend'
 import ActionBadge from '@/components/ActionBadge'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { addWatch } from '@/api/watchlist'
 
 export default function RecommendPage() {
   const [symbols, setSymbols] = useState('')
+  const [provider, setProvider] = useState<string | undefined>(undefined)
+  const [temperature, setTemperature] = useState<number | undefined>(undefined)
+  const [apiKey, setApiKey] = useState<string | undefined>(undefined)
   const qc = useQueryClient()
   const m = useMutation({
-    mutationFn: () => recommend({ symbols: symbols.split(',').map(s=>s.trim()).filter(Boolean) }),
+    mutationFn: () => recommend({ symbols: symbols.split(',').map(s=>s.trim()).filter(Boolean), provider, temperature, api_key: apiKey }),
     onError: (e: any) => message.error(e.message || '推荐失败'),
   })
   const mAdd = useMutation({
@@ -17,6 +20,18 @@ export default function RecommendPage() {
     onSuccess: () => { message.success('已加入自选'); qc.invalidateQueries({ queryKey: ['watchlist'] }) },
     onError: (e: any) => message.error(e.message || '加入失败'),
   })
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('advanced_params')
+      if (raw) {
+        const cfg = JSON.parse(raw)
+        setProvider(cfg.provider)
+        setTemperature(typeof cfg.temperature === 'number' ? cfg.temperature : undefined)
+        setApiKey(typeof cfg.api_key === 'string' && cfg.api_key.trim() ? cfg.api_key : undefined)
+      }
+    } catch {}
+  }, [])
 
   return (
     <div className="container">

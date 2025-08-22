@@ -45,3 +45,34 @@ export async function deleteRecommend(rec_id: number) {
   const r = await http.delete(`/api/recommendations/${rec_id}`)
   return r.data
 }
+
+// 关键词推荐：请求与结果类型
+export type KeywordStartPayload = {
+  keyword: string
+  period?: string
+  max_candidates?: number
+  weights?: Record<string, number>
+  exclude_st?: boolean
+  min_market_cap?: number
+  provider?: string
+  temperature?: number
+  api_key?: string
+}
+
+export type KeywordTaskStatus = { status: string; done: number; total: number; percent: number } | { status: 'not_found' }
+export type KeywordTaskResult = ({ recommendations: RecommendItem[]; rec_id?: number; filtered_count?: number }) | { status: string } | { error: string }
+
+export async function startKeywordRecommend(payload: KeywordStartPayload) {
+  const r = await http.post<{ task_id: string }>('/api/recommend/keyword/start', payload)
+  return r.data
+}
+
+export async function getKeywordStatus(task_id: string) {
+  const r = await http.get(`/api/recommend/keyword/status/${encodeURIComponent(task_id)}`)
+  return r.data as KeywordTaskStatus
+}
+
+export async function getKeywordResult(task_id: string) {
+  const r = await http.get(`/api/recommend/keyword/result/${encodeURIComponent(task_id)}`)
+  return r.data as KeywordTaskResult
+}
