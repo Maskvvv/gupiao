@@ -242,7 +242,7 @@ export default function WatchlistPage() {
     } },
     { title: '最近分析时间', dataIndex: '最近分析时间', width: 180 },
     {
-      title: '操作', key: 'ops', width: 140,
+      title: '操作', key: 'ops', width: 140, fixed: 'right',
       render: (_: any, r: WatchItem) => (
         <Dropdown
           menu={{
@@ -257,11 +257,14 @@ export default function WatchlistPage() {
               key === 'analyze' ? mAnalyze.mutate(r.股票代码) :
               key === 'history' ? (setHistSymbol(r.股票代码), setOpenHist(true), refetchHist()) :
               key === 'quote' ? (setQuoteSymbol(r.股票代码), setOpenQuote(true)) :
-              key === 'remove' ? mRemove.mutate(r.股票代码) : null
-            )
+              key === 'remove' ? mRemove.mutate(r.股票代码) : void 0
+            ),
           }}
+          trigger={['click']}
         >
-          <Button size="small">操作 <DownOutlined /></Button>
+          <a onClick={(e) => e.preventDefault()}>
+            操作 <DownOutlined />
+          </a>
         </Dropdown>
       )
     },
@@ -321,6 +324,7 @@ export default function WatchlistPage() {
 
         <div className="table-responsive">
           <Table
+            sticky
             size="small"
             rowKey={(r: WatchItem) => r.股票代码}
             rowSelection={{ selectedRowKeys: selected, onChange: (keys: React.Key[]) => setSelected(keys as string[]) }}
@@ -344,6 +348,7 @@ export default function WatchlistPage() {
               </>
             )}
             <Table
+              sticky
               size="small"
               rowKey={(_, idx) => String(idx)}
               dataSource={hist?.items || []}
@@ -368,6 +373,7 @@ export default function WatchlistPage() {
                     )
                   }
                 },
+                { title: '错误', dataIndex: '错误', width: 160 },
               ] as any}
               pagination={false}
             />

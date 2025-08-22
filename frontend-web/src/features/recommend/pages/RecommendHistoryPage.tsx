@@ -51,6 +51,7 @@ export default function RecommendHistoryPage() {
         </Flex>
 
         <Table
+          sticky
           loading={isLoading}
           rowKey={(r)=>String(r.id)}
           dataSource={data?.records || []}
@@ -63,7 +64,7 @@ export default function RecommendHistoryPage() {
             { title: '候选/入选', key: 'cnt', width: 140, render: (_:any, r:any)=> `${r.total_candidates}/${r.top_n}` },
             { title: '摘要', dataIndex: 'summary' },
             {
-              title: '操作', key: 'ops', width: 220, render: (_:any, r:any)=> (
+              title: '操作', key: 'ops', width: 220, fixed: 'right', render: (_:any, r:any)=> (
                 <Space>
                   <Button size="small" onClick={async ()=>{
                     try {
@@ -94,7 +95,8 @@ export default function RecommendHistoryPage() {
                 </Space>
               )
             },
-          ] as any}
+          ]}
+          scroll={{ x: 'max-content' }}
           pagination={false}
         />
 
