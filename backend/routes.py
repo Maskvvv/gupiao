@@ -6,12 +6,12 @@ from .services.analyzer import basic_analysis
 from .services.ai_router import AIRouter, AIRequest
 from .services.enhanced_analyzer import EnhancedAnalyzer
 
-# 新增：持久化相关
 import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-# 补充：缺失的json导入，避免在持久化weights_config时 NameError
+
+# 新增：持久化相关
 import json
 # 补充：异步任务与任务ID依赖
 import threading
@@ -49,6 +49,25 @@ class RecommendationItem(Base):
     reason_brief = Column(Text)
     ai_advice = Column(Text)
     rec = relationship("Recommendation", back_populates="items")
+
+# 自选股票表
+class Watchlist(Base):
+    __tablename__ = "watchlist"
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(16), unique=True, index=True, nullable=False)
+    name = Column(String(64))
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+# 股票分析记录表
+class AnalysisRecord(Base):
+    __tablename__ = "analysis_records"
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(16), index=True, nullable=False)
+    score = Column(Float)
+    action = Column(String(16))
+    reason_brief = Column(Text)
+    ai_advice = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 # 确保表存在（幂等）
 Base.metadata.create_all(engine)
@@ -95,6 +114,18 @@ class KeywordRecommendationRequest(BaseModel):
     exclude_st: bool = True
     min_market_cap: Optional[float] = None
     # AI参数
+    provider: Optional[str] = None
+    temperature: Optional[float] = None
+    api_key: Optional[str] = None
+
+# 新增：自选相关请求模型
+class WatchlistAddRequest(BaseModel):
+    symbol: str
+
+class WatchlistBatchAnalyzeRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+    period: str = "1y"
+    weights: Optional[Dict[str, float]] = None
     provider: Optional[str] = None
     temperature: Optional[float] = None
     api_key: Optional[str] = None
@@ -375,7 +406,7 @@ def recommend_start(req: RecommendationRequest):
                         period=req_obj.period,
                         total_candidates=len(candidates),
                         top_n=top_n,
-                        weights_config=json.dumps(req_obj.weights) if req_obj.weights else None,
+                        weights_config=json.dumps(req_obj.weights) if req.weights else None,
                         recommend_type="manual"
                     )
                     db.add(rec)
@@ -672,3 +703,191 @@ def recommend_keyword_result(task_id: str):
         return {"error": info.get("error")}
     else:
         return {"status": info.get("status")}
+
+# =================== 自选股票功能 ===================
+@router.post("/watchlist/add")
+def watchlist_add(req: WatchlistAddRequest):
+    symbol = (req.symbol or "").strip()
+    if not symbol:
+        return {"error": "股票代码不能为空"}
+    fetcher = DataFetcher()
+    info = fetcher.get_stock_info(symbol)
+    name = (info.get('股票简称') if info else None) or f"股票{symbol}"
+    with SessionLocal() as db:
+        # 若已存在则直接返回
+        exists = db.query(Watchlist).filter(Watchlist.symbol == symbol).first()
+        if exists:
+            return {"ok": True, "symbol": symbol, "name": exists.name}
+        item = Watchlist(symbol=symbol, name=name)
+        db.add(item)
+        db.commit()
+        return {"ok": True, "symbol": symbol, "name": name}
+
+@router.delete("/watchlist/remove/{symbol}")
+def watchlist_remove(symbol: str):
+    symbol = (symbol or "").strip()
+    with SessionLocal() as db:
+        row = db.query(Watchlist).filter(Watchlist.symbol == symbol).first()
+        if not row:
+            return {"ok": True, "removed": False}
+        db.delete(row)
+        db.commit()
+        return {"ok": True, "removed": True}
+
+@router.get("/watchlist/list")
+def watchlist_list():
+    results = []
+    with SessionLocal() as db:
+        wl = db.query(Watchlist).order_by(Watchlist.created_at.desc()).all()
+        for it in wl:
+            last = db.query(AnalysisRecord).filter(AnalysisRecord.symbol == it.symbol).order_by(AnalysisRecord.created_at.desc()).first()
+            results.append({
+                "股票代码": it.symbol,
+                "股票名称": it.name,
+                "综合评分": round(float(last.score), 2) if last and last.score is not None else None,
+                "操作建议": last.action if last else None,
+                "分析理由摘要": (last.reason_brief or "").split("。")[0] + "。" if last and last.reason_brief else None,
+                "最近分析时间": last.created_at.strftime("%Y-%m-%d %H:%M:%S") if last else None
+            })
+    return {"items": results}
+
+@router.post("/watchlist/analyze")
+def watchlist_analyze(req: WatchlistBatchAnalyzeRequest):
+    # 单股分析：当symbols为单只或未传时，要求用户传一只
+    symbols = (req.symbols or [])
+    if len(symbols) != 1:
+        return {"error": "请仅传入一只股票进行单股分析"}
+    symbol = symbols[0]
+    fetcher = DataFetcher()
+    df = fetcher.get_stock_data(symbol, period=req.period)
+    if df is None:
+        return {"error": f"无法获取{symbol}历史数据"}
+    df_compatible = df.reset_index()
+    df_compatible.columns = [c.lower() for c in df_compatible.columns]
+    analyzer = EnhancedAnalyzer()
+    ai_params = {"provider": req.provider, "temperature": req.temperature, "api_key": req.api_key}
+    analysis = analyzer.analyze_with_ai(symbol, df_compatible, weights=req.weights, ai_params=ai_params)
+    # 持久化分析记录
+    if analysis.get("valid", True):
+        reason = analysis.get("action_reason") or (analysis.get("ai_advice") or "").split("\n")[0]
+        with SessionLocal() as db:
+            db.add(AnalysisRecord(
+                symbol=symbol,
+                score=float(analysis.get("score", 0.0)) if analysis.get("score") is not None else None,
+                action=analysis.get("action"),
+                reason_brief=reason,
+                ai_advice=analysis.get("ai_advice")
+            ))
+            db.commit()
+    return {"symbol": symbol, "analysis": analysis}
+
+@router.post("/watchlist/analyze/batch/start")
+def watchlist_analyze_batch_start(req: WatchlistBatchAnalyzeRequest):
+    task_id = str(uuid.uuid4())
+    PROGRESS_STORE[task_id] = {"status": "running", "done": 0, "total": 0, "percent": 0}
+
+    def worker(req_obj, task):
+        try:
+            fetcher = DataFetcher()
+            analyzer = EnhancedAnalyzer()
+            ai_params = {"provider": req_obj.provider, "temperature": req_obj.temperature, "api_key": req_obj.api_key}
+            with SessionLocal() as db:
+                if req_obj.symbols:
+                    syms = [s.strip() for s in req_obj.symbols if s and s.strip()]
+                else:
+                    syms = [w.symbol for w in db.query(Watchlist).all()]
+            total = len(syms)
+            PROGRESS_STORE[task].update({"total": total})
+            results = []
+            done = 0
+            for s in syms:
+                df = fetcher.get_stock_data(s, period=req_obj.period)
+                if df is None:
+                    results.append({"股票代码": s, "错误": "无法获取数据"})
+                    done += 1
+                    PROGRESS_STORE[task].update({"done": done, "percent": int(done*100/max(total,1))})
+                    continue
+                df_compatible = df.reset_index()
+                df_compatible.columns = [c.lower() for c in df_compatible.columns]
+                analysis = analyzer.analyze_with_ai(s, df_compatible, weights=req_obj.weights, ai_params=ai_params)
+                # 持久化
+                if analysis.get("valid", True):
+                    reason = analysis.get("action_reason") or (analysis.get("ai_advice") or "").split("\n")[0]
+                    with SessionLocal() as db:
+                        db.add(AnalysisRecord(
+                            symbol=s,
+                            score=float(analysis.get("score", 0.0)) if analysis.get("score") is not None else None,
+                            action=analysis.get("action"),
+                            reason_brief=reason,
+                            ai_advice=analysis.get("ai_advice")
+                        ))
+                        db.commit()
+                # 输出结构（中文字段）
+                fetcher_local = DataFetcher()
+                info = fetcher_local.get_stock_info(s)
+                stock_name = (info.get('股票简称') if info else None) or f"股票{s}"
+                results.append({
+                    "股票代码": s,
+                    "股票名称": stock_name,
+                    "评分": round(float(analysis.get("score", 0.0)), 2) if analysis.get("score") is not None else None,
+                    "建议动作": analysis.get("action"),
+                    "理由简述": (analysis.get("action_reason") or (analysis.get("ai_advice") or "").split("\n")[0] or "").strip()
+                })
+                done += 1
+                PROGRESS_STORE[task].update({"done": done, "percent": int(done*100/max(total,1))})
+            PROGRESS_STORE[task].update({"status": "done", "result": {"items": results}})
+        except Exception as e:
+            PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
+
+    threading.Thread(target=worker, args=(req, task_id), daemon=True).start()
+    return {"task_id": task_id}
+
+@router.get("/watchlist/analyze/batch/status/{task_id}")
+def watchlist_analyze_batch_status(task_id: str):
+    info = PROGRESS_STORE.get(task_id, {})
+    if not info:
+        return {"status": "not_found"}
+    return {"status": info.get("status"), "done": info.get("done", 0), "total": info.get("total", 0), "percent": info.get("percent", 0)}
+
+@router.get("/watchlist/analyze/batch/result/{task_id}")
+def watchlist_analyze_batch_result(task_id: str):
+    info = PROGRESS_STORE.get(task_id, {})
+    if not info:
+        return {"status": "not_found"}
+    if info.get("status") == "done":
+        return info.get("result", {})
+    elif info.get("status") == "error":
+        return {"error": info.get("error")}
+    else:
+        return {"status": info.get("status")}
+# =================== 自选股票功能 END ===================
+
+# 新增：个股分析历史查询
+@router.get("/watchlist/history/{symbol}")
+def watchlist_history(symbol: str, page: int = 1, page_size: int = 20):
+    symbol = (symbol or "").strip()
+    if not symbol:
+        return {"error": "股票代码不能为空"}
+    # 分页参数边界
+    page = 1 if not isinstance(page, int) or page < 1 else page
+    page_size = 20 if not isinstance(page_size, int) or page_size < 1 else min(page_size, 200)
+    with SessionLocal() as db:
+        q = db.query(AnalysisRecord).filter(AnalysisRecord.symbol == symbol).order_by(AnalysisRecord.created_at.desc())
+        total = q.count()
+        recs = q.offset((page - 1) * page_size).limit(page_size).all()
+        items = []
+        for r in recs:
+            items.append({
+                "时间": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
+                "综合评分": round(float(r.score), 2) if r.score is not None else None,
+                "操作建议": r.action,
+                "分析理由摘要": r.reason_brief,
+                "AI详细分析": r.ai_advice,
+            })
+    return {
+        "symbol": symbol,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }

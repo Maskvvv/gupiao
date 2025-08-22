@@ -16,7 +16,7 @@ st.title("分析与推荐")
 with st.sidebar:
     st.header("基础设置")
     backend_url = st.text_input("后端地址", value=BACKEND_URL)
-    default_symbols = st.text_input("A股代码（逗号分隔）", value="000001, 000002, 300750, 600036")
+    default_symbols = st.text_input("代码（逗号分隔）", value="000001, 000002, 300750, 600036")
     period = st.selectbox("历史周期", ["6mo", "1y", "2y", "5y"], index=1)
     
     st.divider()
@@ -80,7 +80,7 @@ with st.sidebar:
     st.session_state.weights = weights
 
 # Tabs
-rec_tab, single_tab, history_tab = st.tabs(["🧠 AI推荐", "🔍 单股分析", "🗂 推荐历史"])
+rec_tab, single_tab, history_tab, watchlist_tab = st.tabs(["🧠 AI推荐", "🔍 单股分析", "🗂 推荐历史", "⭐ 自选股票"])
 
 # 帮助方法：渲染动作标签
 ACTION_COLORS = {
@@ -91,8 +91,46 @@ ACTION_COLORS = {
 
 get_action_badge = lambda action: f"<span style='background:{ACTION_COLORS.get(action, '#64748b')};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px'>{action or 'N/A'}</span>"
 
+# 帮助方法：渲染个股历史（上移到首次调用之前，防止未定义）
+def render_stock_history(symbol: str, backend_url: str):
+    """渲染指定股票的历史分析记录（带分页控件）。"""
+    try:
+        cc1, cc2 = st.columns([1, 2])
+        page = cc1.number_input("页码", min_value=1, value=1, step=1, key=f"hist_page_{symbol}")
+        page_size = cc2.slider("每页数量", 5, 50, 10, key=f"hist_page_size_{symbol}")
+        params = {"page": int(page), "page_size": int(page_size)}
+        resp = requests.get(f"{backend_url}/api/watchlist/history/{symbol}", params=params, timeout=30)
+        data = resp.json() if resp.status_code == 200 else {"error": resp.text}
+        if data.get("error"):
+            st.error(f"获取历史失败：{data.get('error')}")
+            return
+        items = data.get("items", []) or []
+        if not items:
+            st.info("暂无分析历史记录")
+            return
+        df_hist = pd.DataFrame(items)
+        st.dataframe(df_hist, use_container_width=True)
+        with st.expander("展开每条历史详情", expanded=False):
+            for idx, it in enumerate(items):
+                # 顶部概览行（时间/分数/动作）
+                st.markdown(
+                    f"- {it.get('时间')} | 评分: {it.get('综合评分')} | 动作: "
+                    + get_action_badge(it.get('操作建议')),
+                    unsafe_allow_html=True,
+                )
+                # 摘要
+                brief = it.get("分析理由摘要") or "(无摘要)"
+                st.caption(brief)
+                # 详细AI分析
+                detail = it.get("AI详细分析")
+                if detail:
+                    with st.expander(f"AI详细分析 - 第{idx+1}条", expanded=False):
+                        st.write(detail)
+    except Exception as e:
+        st.error(f"请求失败：{e}")
+
 with rec_tab:
-    st.subheader("根据行情推荐可购买股票")
+    st.subheader("根据行情推荐")
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
         gen_manual = st.button("生成推荐（使用输入列表）")
@@ -165,6 +203,23 @@ with rec_tab:
                             else:
                                 df_rec = pd.DataFrame(recs)
                                 st.dataframe(df_rec, use_container_width=True)
+                                with st.expander("对这些股票进行操作", expanded=False):
+                                    for i, item in enumerate(recs):
+                                        sym = (item.get("股票代码") or item.get("symbol") or "").strip()
+                                        name = (item.get("股票名称") or item.get("name") or sym)
+                                        c1, c2, c3 = st.columns([2, 3, 1])
+                                        c1.write(sym)
+                                        c2.write(name)
+                                        if c3.button("加入自选", key=f"manual_add_wl_{sym}_{i}"):
+                                            try:
+                                                r2 = requests.post(f"{backend_url}/api/watchlist/add", json={"symbol": sym}, timeout=15)
+                                                j2 = r2.json() if r2.status_code == 200 else {"error": r2.text}
+                                                if j2.get("ok"):
+                                                    st.success(f"已加入自选：{sym}")
+                                                else:
+                                                    st.error(f"添加失败：{j2.get('error') or r2.text}")
+                                            except Exception as e2:
+                                                st.error(f"请求失败：{e2}")
             except Exception as e:
                 st.error(f"请求失败: {e}")
 
@@ -213,6 +268,23 @@ with rec_tab:
                         else:
                             df_rec = pd.DataFrame(recs)
                             st.dataframe(df_rec, use_container_width=True)
+                            with st.expander("对这些股票进行操作", expanded=False):
+                                for i, item in enumerate(recs):
+                                    sym = (item.get("股票代码") or item.get("symbol") or "").strip()
+                                    name = (item.get("股票名称") or item.get("name") or sym)
+                                    c1, c2, c3 = st.columns([2, 3, 1])
+                                    c1.write(sym)
+                                    c2.write(name)
+                                    if c3.button("加入自选", key=f"market_add_wl_{sym}_{i}"):
+                                        try:
+                                            r2 = requests.post(f"{backend_url}/api/watchlist/add", json={"symbol": sym}, timeout=15)
+                                            j2 = r2.json() if r2.status_code == 200 else {"error": r2.text}
+                                            if j2.get("ok"):
+                                                st.success(f"已加入自选：{sym}")
+                                            else:
+                                                st.error(f"添加失败：{j2.get('error') or r2.text}")
+                                        except Exception as e2:
+                                            st.error(f"请求失败：{e2}")
         except Exception as e:
             st.error(f"请求失败: {e}")
 
@@ -280,7 +352,8 @@ with rec_tab:
 with single_tab:
     st.subheader("单股分析")
     symbol = st.text_input("股票代码", value="000001")
-    if st.button("分析该股票"):
+    csa1, csa2 = st.columns([1,1])
+    if csa1.button("分析该股票"):
         if not symbol.strip():
             st.warning("请输入股票代码")
         else:
@@ -288,13 +361,12 @@ with single_tab:
                 payload = {"symbols": [symbol.strip()], "period": period, "weights": st.session_state.weights}
                 cfg = st.session_state.get("ai_config", {})
                 payload.update({k: cfg.get(k) for k in ("provider", "temperature", "api_key")})
-                resp = requests.post(f"{backend_url}/api/analyze", json=payload, timeout=180)
+                resp = requests.post(f"{backend_url}/api/watchlist/analyze", json=payload, timeout=180)
                 data = resp.json()
-                results = data.get("results", [])
-                if not results:
-                    st.info("未返回分析结果")
+                if data.get("error"):
+                    st.error(f"任务失败: {data.get('error')}")
                 else:
-                    r = results[0]
+                    r = data.get("analysis", {})
                     st.write("动作建议:", unsafe_allow_html=True)
                     st.markdown(get_action_badge(r.get('action')), unsafe_allow_html=True)
                     st.write(f"评分: {r.get('score')}")
@@ -306,6 +378,19 @@ with single_tab:
                         st.write(r.get("ai_advice") or "(无AI解读)")
             except Exception as e:
                 st.error(f"请求失败: {e}")
+    if csa2.button("加入自选"):
+        if not symbol.strip():
+            st.warning("请输入股票代码")
+        else:
+            try:
+                ar = requests.post(f"{backend_url}/api/watchlist/add", json={"symbol": symbol.strip()}, timeout=15)
+                aj = ar.json() if ar.status_code == 200 else {"error": ar.text}
+                if aj.get("ok"):
+                    st.success(f"已加入自选：{symbol.strip()}")
+                else:
+                    st.error(f"添加失败：{aj.get('error') or ar.text}")
+            except Exception as e:
+                st.error(f"请求失败：{e}")
 with history_tab:
     st.subheader("历史推荐记录")
     try:
@@ -344,3 +429,164 @@ with history_tab:
             st.caption("暂无历史记录")
     except Exception as e:
         st.error(f"加载历史失败: {e}")
+with watchlist_tab:
+    st.subheader("自选股票")
+    # 添加入口
+    add_sym = st.text_input("添加股票代码到自选", value="", placeholder="例如：600036、000001")
+    c_add1, c_add2 = st.columns([1,3])
+    if c_add1.button("加入自选", key="wl_add_input_btn"):
+        s_add = (add_sym or "").strip()
+        if not s_add:
+            st.warning("请输入股票代码")
+        else:
+            try:
+                r = requests.post(f"{backend_url}/api/watchlist/add", json={"symbol": s_add}, timeout=15)
+                j = r.json() if r.status_code == 200 else {"error": r.text}
+                if j.get("ok"):
+                    st.success(f"已加入自选：{s_add}")
+                else:
+                    st.error(f"添加失败：{j.get('error') or r.text}")
+            except Exception as e:
+                st.error(f"请求失败：{e}")
+    st.divider()
+    # 列表展示
+    try:
+        lst_resp = requests.get(f"{backend_url}/api/watchlist/list", timeout=30)
+        lst = lst_resp.json() if lst_resp.status_code == 200 else {"items": []}
+        items = lst.get("items", [])
+        if not items:
+            st.info("暂无自选股票，快去添加吧～ ✨")
+        else:
+            df_wl = pd.DataFrame(items)
+            st.dataframe(df_wl, use_container_width=True)
+            # 个股操作
+            st.subheader("个股操作")
+            for i, it in enumerate(items):
+                sym = it.get("股票代码")
+                name = it.get("股票名称")
+                c1, c2, c3, c4, c5 = st.columns([2,3,1,1,1])
+                c1.write(sym)
+                c2.write(name)
+                if c3.button("分析", key=f"wl_analyze_{sym}_{i}"):
+                    try:
+                        payload = {"symbols": [sym], "period": period, "weights": st.session_state.weights}
+                        cfg = st.session_state.get("ai_config", {})
+                        payload.update({k: cfg.get(k) for k in ("provider", "temperature", "api_key")})
+                        r3 = requests.post(f"{backend_url}/api/watchlist/analyze", json=payload, timeout=180)
+                        j3 = r3.json()
+                        if j3.get("error"):
+                            st.error(f"分析失败：{j3.get('error')}")
+                        else:
+                            st.success(f"分析完成并已保存：{sym}")
+                    except Exception as e:
+                        st.error(f"请求失败：{e}")
+                
+                # 历史查看按钮与展示
+                hist_state_key = f"show_hist_{sym}"
+                if c5.button("历史", key=f"wl_history_{sym}_{i}"):
+                    st.session_state[hist_state_key] = not st.session_state.get(hist_state_key, False)
+                if st.session_state.get(hist_state_key, False):
+                    with st.expander(f"{sym} 历史分析", expanded=True):
+                        render_stock_history(sym, backend_url)
+                
+                if c4.button("移除", key=f"wl_remove_{sym}_{i}"):
+                    try:
+                        rr = requests.delete(f"{backend_url}/api/watchlist/remove/{sym}", timeout=15)
+                        rj = rr.json() if rr.status_code == 200 else {"error": rr.text}
+                        if rj.get("ok"):
+                            st.success(f"已移除：{sym}")
+                            # 同时清理历史显示状态
+                            st.session_state.pop(hist_state_key, None)
+                        else:
+                            st.error(f"移除失败：{rj.get('error') or rr.text}")
+                    except Exception as e:
+                        st.error(f"请求失败：{e}")
+            st.divider()
+            # 批量操作
+            st.subheader("批量分析")
+            all_syms = [it.get("股票代码") for it in items]
+            selected_syms = st.multiselect("选择需要批量分析的股票", options=all_syms, default=[])
+            if st.button("开始批量分析", type="primary", key="wl_batch_start"):
+                if not selected_syms:
+                    st.warning("请至少选择一只股票")
+                else:
+                    try:
+                        payload = {"symbols": selected_syms, "period": period, "weights": st.session_state.weights}
+                        cfg = st.session_state.get("ai_config", {})
+                        payload.update({k: cfg.get(k) for k in ("provider", "temperature", "api_key")})
+                        r = requests.post(f"{backend_url}/api/watchlist/analyze/batch/start", json=payload, timeout=30)
+                        if r.status_code != 200:
+                            st.error(f"启动任务失败: {r.text}")
+                        else:
+                            task_id = r.json().get("task_id")
+                            if not task_id:
+                                st.error("未获得任务ID")
+                            else:
+                                prog = st.progress(0, text="正在批量分析...")
+                                status_area = st.empty()
+                                while True:
+                                    s = requests.get(f"{backend_url}/api/watchlist/analyze/batch/status/{task_id}", timeout=15)
+                                    sj = s.json()
+                                    if sj.get("status") == "not_found":
+                                        status_area.warning("任务不存在或已过期")
+                                        break
+                                    percent = int(sj.get("percent", 0))
+                                    done = sj.get("done", 0)
+                                    total = sj.get("total", 0)
+                                    prog.progress(min(max(percent, 0), 100), text=f"进度 {done}/{total}（{percent}%）")
+                                    if sj.get("status") in ("done", "error"):
+                                        break
+                                    time.sleep(0.6)
+                                res = requests.get(f"{backend_url}/api/watchlist/analyze/batch/result/{task_id}", timeout=60)
+                                data = res.json()
+                                if data.get("error"):
+                                    st.error(f"任务失败: {data.get('error')}")
+                                else:
+                                    items_res = data.get("items", [])
+                                    if not items_res:
+                                        st.info("未返回结果")
+                                    else:
+                                        st.success("批量分析完成，结果已持久化保存")
+                                        st.dataframe(pd.DataFrame(items_res), use_container_width=True)
+                    except Exception as e:
+                        st.error(f"请求失败：{e}")
+    except Exception as e:
+        st.error(f"加载自选列表失败：{e}")
+
+# 帮助方法：渲染个股历史
+def render_stock_history(symbol: str, backend_url: str):
+    """渲染指定股票的历史分析记录（带分页控件）。"""
+    try:
+        cc1, cc2 = st.columns([1, 2])
+        page = cc1.number_input("页码", min_value=1, value=1, step=1, key=f"hist_page_{symbol}")
+        page_size = cc2.slider("每页数量", 5, 50, 10, key=f"hist_page_size_{symbol}")
+        params = {"page": int(page), "page_size": int(page_size)}
+        resp = requests.get(f"{backend_url}/api/watchlist/history/{symbol}", params=params, timeout=30)
+        data = resp.json() if resp.status_code == 200 else {"error": resp.text}
+        if data.get("error"):
+            st.error(f"获取历史失败：{data.get('error')}")
+            return
+        items = data.get("items", []) or []
+        if not items:
+            st.info("暂无分析历史记录")
+            return
+        df_hist = pd.DataFrame(items)
+        st.dataframe(df_hist, use_container_width=True)
+        with st.expander("展开每条历史详情", expanded=False):
+            for idx, it in enumerate(items):
+                # 顶部概览行（时间/分数/动作）
+                st.markdown(
+                    f"- {it.get('时间')} | 评分: {it.get('综合评分')} | 动作: "
+                    + get_action_badge(it.get('操作建议')),
+                    unsafe_allow_html=True,
+                )
+                # 摘要
+                brief = it.get("分析理由摘要") or "(无摘要)"
+                st.caption(brief)
+                # 详细AI分析
+                detail = it.get("AI详细分析")
+                if detail:
+                    with st.expander(f"AI详细分析 - 第{idx+1}条", expanded=False):
+                        st.write(detail)
+    except Exception as e:
+        st.error(f"请求失败：{e}")
