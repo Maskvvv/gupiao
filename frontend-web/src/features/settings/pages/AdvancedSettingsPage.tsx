@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { App, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Slider, Space, Switch, Typography } from 'antd'
+import { App, Button, Card, Col, Divider, Form, Input, InputNumber, Row, Select, Slider, Space, Switch, Typography, Tooltip } from 'antd'
 
 // 本地存储键
 const LS_KEY = 'advanced_params'
@@ -21,6 +21,24 @@ function useThrottledSaver(delay = 400) {
       try { localStorage.setItem(LS_KEY, JSON.stringify(obj)) } catch {}
     }, delay)
   }
+}
+
+// 说明标签组件（含 hover 提示与内联 SVG 图标）
+function LabelWithTip({ text, tip }: { text: string; tip: string }) {
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span>{text}</span>
+      <Tooltip title={tip} placement="top">
+        <span aria-label="说明" style={{ display: 'inline-flex', cursor: 'help', color: '#999' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.6" fill="none" />
+            <path d="M12 10.5c-.8 0-1.3.5-1.3 1.1 0 .6.5 1 .9 1.2.7.3 1.3.6 1.3 1.4 0 .9-.8 1.6-1.9 1.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="12" cy="7.5" r="1.2" fill="currentColor" />
+          </svg>
+        </span>
+      </Tooltip>
+    </div>
+  )
 }
 
 export default function AdvancedSettingsPage() {
@@ -98,7 +116,7 @@ export default function AdvancedSettingsPage() {
         >
           <Row gutter={[12, 12]}>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="分析周期" name="period">
+              <Form.Item label={<LabelWithTip text="分析周期" tip="用于抓取历史K线数据的时间跨度，影响技术指标与AI分析上下文。值越长越全面但更耗时；支持 6m/1y/2y，留空或无效默认 1y。对自选分析、AI推荐、关键词推荐均生效。" />} name="period">
                 <Select options={[
                   { value: '6m', label: '6个月' },
                   { value: '1y', label: '1年' },
@@ -107,22 +125,22 @@ export default function AdvancedSettingsPage() {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="Top 数量" name="max_candidates">
+              <Form.Item label={<LabelWithTip text="Top 数量" tip="结果保留的候选上限。在关键词推荐中还用于控制第二阶段的分析数量（约取 TopN 的两倍再筛选）。数值越大耗时越长，建议 5~20。" />} name="max_candidates">
                 <InputNumber min={1} max={50} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="剔除 ST" name="exclude_st" valuePropName="checked">
+              <Form.Item label={<LabelWithTip text="剔除 ST" tip="是否在市场筛选阶段排除名称包含 ST 或 *ST 的股票，仅对关键词/市场自动筛选生效；不影响手动单股分析及自选中已有标的。" />} name="exclude_st" valuePropName="checked">
                 <Switch />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="最小市值（亿）" name="min_market_cap">
+              <Form.Item label={<LabelWithTip text="最小市值（亿）" tip="按总市值阈值过滤股票池，仅对关键词/市场自动筛选生效；单位为亿元。留空表示不限。注：市值来自行情快照，偶有解析失败时将忽略该过滤。" />} name="min_market_cap">
                 <InputNumber min={0} placeholder="可留空" style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="AI Provider" name="provider">
+              <Form.Item label={<LabelWithTip text="AI Provider" tip="指定调用的AI服务商，留空使用服务器默认。可选：DeepSeek / OpenAI / Gemini。不同服务商能力与计费不同，请按需选择。" />} name="provider">
                 <Select allowClear placeholder="自动（后端配置）" options={[
                   { value: 'deepseek', label: 'DeepSeek' },
                   { value: 'openai', label: 'OpenAI' },
@@ -131,12 +149,12 @@ export default function AdvancedSettingsPage() {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="Temperature" name="temperature">
+              <Form.Item label={<LabelWithTip text="Temperature" tip="取值 0~1，控制AI输出的随机性：越低越稳定、越高越发散。建议 0.2~0.7；留空使用后端默认值。" />} name="temperature">
                 <InputNumber min={0} max={1} step={0.1} placeholder="可留空" style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={24} md={16}>
-              <Form.Item label="API Key" name="api_key">
+              <Form.Item label={<LabelWithTip text="API Key" tip="当选择需要密钥的服务商时可在此填写；不填则尝试使用服务器端配置（若有）。密钥将保存在本地浏览器并随请求发送，请妥善保管。" />} name="api_key">
                 <Input.Password placeholder="可留空，使用服务器配置" autoComplete="off" />
               </Form.Item>
             </Col>
@@ -145,17 +163,17 @@ export default function AdvancedSettingsPage() {
           <Divider>权重设置</Divider>
           <Row gutter={[12, 12]}>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="技术面" name={['weights','technical']}>
+              <Form.Item label={<LabelWithTip text="技术面" tip="控制AI分析中对技术指标（均线/RSI/MACD等）的重视程度。不会改变技术指标的计算本身，但会影响AI建议与理由的侧重。" />} name={['weights','technical']}>
                 <Slider min={0} max={1} step={0.05} tooltip={{ formatter: v => `${v}` }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="宏观情绪" name={['weights','macro_sentiment']}>
+              <Form.Item label={<LabelWithTip text="宏观情绪" tip="控制AI对市场情绪/宏观环境（政策、流动性、经济数据、行业周期等）的重视程度，仅影响AI结论的权重比重。" />} name={['weights','macro_sentiment']}>
                 <Slider min={0} max={1} step={0.05} tooltip={{ formatter: v => `${v}` }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item label="新闻事件" name={['weights','news_events']}>
+              <Form.Item label={<LabelWithTip text="新闻事件" tip="控制AI对公司公告、行业政策与突发事件等信息的重视程度，仅影响AI分析的侧重与表述。" />} name={['weights','news_events']}>
                 <Slider min={0} max={1} step={0.05} tooltip={{ formatter: v => `${v}` }} />
               </Form.Item>
             </Col>
