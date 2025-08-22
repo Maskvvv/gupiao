@@ -1,6 +1,8 @@
 import { Layout, theme, Menu } from 'antd'
 import { Link, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import WatchlistPage from '@/features/watchlist/pages/WatchlistPage'
+import RecommendPage from '@/features/recommend/pages/RecommendPage'
+import RecommendHistoryPage from '@/features/recommend/pages/RecommendHistoryPage'
 import './styles.css'
 
 const { Header, Content, Footer } = Layout
@@ -22,8 +24,8 @@ export default function App() {
       <Content style={{ padding: 16, background: token.colorBgContainer }}>
         <Routes>
           <Route path="/" element={<WatchlistPage />} />
-          <Route path="/ai" element={<div style={{ padding: 24 }}>即将到来～</div>} />
-          <Route path="/history" element={<div style={{ padding: 24 }}>即将到来～</div>} />
+          <Route path="/ai" element={<RecommendPage />} />
+          <Route path="/history" element={<RecommendHistoryPage />} />
         </Routes>
         <Outlet />
       </Content>
