@@ -29,10 +29,12 @@ export type HistoryRecord = {
   total_candidates: number
   top_n: number
   summary: string
+  recommend_type?: string
+  status?: string
 }
 
-export async function getRecommendHistory(page = 1, page_size = 10, start_date?: string, end_date?: string) {
-  const r = await http.get('/api/recommendations/history', { params: { page, page_size, start_date, end_date } })
+export async function getRecommendHistory(page = 1, page_size = 10, start_date?: string, end_date?: string, recommend_type?: string) {
+  const r = await http.get('/api/recommendations/history', { params: { page, page_size, start_date, end_date, recommend_type } })
   return r.data as { total: number; page: number; page_size: number; records: HistoryRecord[] }
 }
 

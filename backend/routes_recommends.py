@@ -11,7 +11,8 @@ def get_recommendation_history(
     page: int = Query(1, ge=1, description="页码，从1开始"),
     page_size: int = Query(10, ge=1, le=50, description="每页数量"),
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
-    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD")
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    recommend_type: Optional[str] = Query(None, description="推荐类型 manual/market_wide/keyword")
 ):
     """查询推荐历史记录"""
     with SessionLocal() as db:
@@ -32,6 +33,10 @@ def get_recommendation_history(
             except ValueError:
                 pass
         
+        # 类型过滤
+        if recommend_type:
+            query = query.filter(Recommendation.recommend_type == recommend_type)
+        
         # 分页
         total = query.count()
         records = query.order_by(Recommendation.created_at.desc())\
@@ -48,6 +53,8 @@ def get_recommendation_history(
                 "period": rec.period,
                 "total_candidates": rec.total_candidates,
                 "top_n": rec.top_n,
+                "recommend_type": getattr(rec, "recommend_type", None),
+                "status": "done",
                 "summary": f"从{rec.total_candidates}只候选股票中推荐{rec.top_n}只"
             })
         

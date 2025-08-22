@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Divider, Flex, Input, Space, Typography, message, Progress, Skeleton } from 'antd'
+import { Button, Card, Divider, Flex, Input, Space, Typography, message, Progress, Skeleton, InputNumber } from 'antd'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { addWatch } from '@/api/watchlist'
 import ActionBadge from '@/components/ActionBadge'
@@ -105,8 +105,10 @@ export default function KeywordRecommendPage() {
   return (
     <div className="container">
       <Card title="关键词推荐" extra={
-        <Flex gap={8}>
+        <Flex gap={8} align="center">
           <Input placeholder="输入关键词，如 AI、机器人、低空经济…" value={keyword} onChange={e=>setKeyword(e.target.value)} onPressEnter={()=>mStart.mutate()} allowClear style={{ width: 420 }} />
+          <span>Top：</span>
+          <InputNumber min={1} max={50} value={maxCandidates} onChange={(v)=> setMaxCandidates(typeof v === 'number' ? v : maxCandidates)} style={{ width: 90 }} />
           <Button type="primary" onClick={()=>mStart.mutate()} loading={mStart.isPending}>开始筛选</Button>
         </Flex>
       }>

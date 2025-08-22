@@ -10,7 +10,7 @@ export type WatchItem = {
 }
 
 export async function listWatchlist() {
-  const r = await http.get<{ items: WatchItem[] }>('/api/watchlist/list')
+  const r = await http.get<{ items: WatchItem[] }>(' /api/watchlist/list'.trim())
   return r.data.items || []
 }
 
@@ -24,8 +24,18 @@ export async function removeWatch(symbol: string) {
   return r.data
 }
 
-export async function analyzeOne(symbol: string) {
-  const r = await http.post('/api/watchlist/analyze', { symbols: [symbol] })
+export async function analyzeOne(
+  symbol: string,
+  opts?: { period?: string; weights?: Record<string, number>; provider?: string; temperature?: number; api_key?: string }
+) {
+  const payload: any = { symbols: [symbol] }
+  // 仅在存在时附加可选参数，保持后端默认值
+  if (opts?.period) payload.period = opts.period
+  if (opts?.weights) payload.weights = opts.weights
+  if (opts?.provider) payload.provider = opts.provider
+  if (typeof opts?.temperature === 'number') payload.temperature = opts.temperature
+  if (opts?.api_key) payload.api_key = opts.api_key
+  const r = await http.post('/api/watchlist/analyze', payload)
   return r.data
 }
 

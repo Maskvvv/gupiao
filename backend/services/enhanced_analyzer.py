@@ -302,9 +302,9 @@ class EnhancedAnalyzer:
         # 创建新的进度回调，映射到第二阶段
         def analysis_progress_callback(done, total):
             if progress_callback:
-                # 第二阶段占总进度的50%
-                overall_done = 1 + (done / total) if total > 0 else 1
-                progress_callback(min(int(overall_done * 100) / 100 * 2, 2), 2)
+                # 第二阶段占总进度的一半：映射为 [1, 2] / 总计 2 个阶段
+                overall_done = 1 + (done / max(total, 1))
+                progress_callback(min(round(overall_done, 2), 2), 2)
         
         analyses = self.bulk_analyze(
             stocks_to_analyze, 

@@ -21,6 +21,23 @@ export default function WatchlistPage() {
   const cancelRef = useRef(false)
   const [batchStatus, setBatchStatus] = useState<'idle'|'running'|'success'|'error'|'timeout'|'stopped'>('idle')
 
+  // 读取高级参数（provider/temperature/api_key），兜底处理异常
+  const [provider, setProvider] = useState<string | undefined>(undefined)
+  const [temperature, setTemperature] = useState<number | undefined>(undefined)
+  const [apiKey, setApiKey] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('advanced_params')
+      if (!raw) return
+      const cfg = JSON.parse(raw || '{}') || {}
+      setProvider(cfg.provider || undefined)
+      setTemperature(typeof cfg.temperature === 'number' ? cfg.temperature : undefined)
+      setApiKey(cfg.api_key || undefined)
+    } catch (e) {
+      // 忽略解析错误
+    }
+  }, [])
+
   const { data: hist, refetch: refetchHist, isFetching: fetchingHist } = useQuery({
     queryKey: ['history', histSymbol, page, pageSize],
     queryFn: () => listHistory(histSymbol || '', page, pageSize),
@@ -54,14 +71,25 @@ export default function WatchlistPage() {
   })
 
   const mAnalyze = useMutation({
-    mutationFn: (s: string) => analyzeOne(s),
+    mutationFn: async (s: string) => {
+      if ((provider || '').toLowerCase() === 'deepseek' && !apiKey) {
+        message.warning('DeepSeek API Key 未配置，将尝试使用后端默认密钥')
+      }
+      return analyzeOne(s, { provider, temperature, api_key: apiKey })
+    },
     onSuccess: () => { message.success('已触发分析'); qc.invalidateQueries({ queryKey: ['watchlist'] }) },
     onError: (e: any) => message.error(e.message || '分析失败'),
   })
 
   const mBatchStart = useMutation({
     mutationFn: async (symbols: string[] | undefined) => {
+      if ((provider || '').toLowerCase() === 'deepseek' && !apiKey) {
+        message.warning('DeepSeek API Key 未配置，将尝试使用后端默认密钥')
+      }
       const payload: any = { symbols: symbols && symbols.length ? symbols : undefined }
+      if (provider) payload.provider = provider
+      if (typeof temperature === 'number') payload.temperature = temperature
+      if (apiKey) payload.api_key = apiKey
       const r = await startBatchAnalyze(payload)
       return r.task_id
     },
@@ -230,40 +258,40 @@ export default function WatchlistPage() {
       </Drawer>
 
       <Drawer title="批量分析" width={720} open={batchOpen} onClose={() => { cancelRef.current = true; setBatchOpen(false); /* 不清除 taskId/localStorage，便于后续恢复 */ }} destroyOnClose>
-        <Flex vertical gap={8}>
-          <div>
-            <Typography.Text type="secondary">未选择股票将默认分析全部自选</Typography.Text>
-          </div>
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
           {batchStatus !== 'idle' && (
-            <Typography.Paragraph type={batchStatus==='error'?'danger': batchStatus==='success'?'success': undefined}>
-              状态：{batchStatus === 'running' ? '分析中…' : batchStatus === 'success' ? '已完成' : batchStatus === 'error' ? '出错' : batchStatus === 'timeout' ? '超时' : '已停止'}
-            </Typography.Paragraph>
+            <>
+              <Typography.Paragraph type={batchStatus==='error'?'danger': batchStatus==='success'?'success': undefined}>
+                状态：{batchStatus === 'running' ? '分析中…' : batchStatus === 'success' ? '已完成' : batchStatus === 'error' ? '出错' : batchStatus === 'timeout' ? '超时' : '已停止'}
+              </Typography.Paragraph>
+              <Progress percent={percent} status={percent>=100? 'success' : 'active'} />
+              <Space>
+                <Button onClick={() => { cancelRef.current = true; setBatchStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
+                <Button danger onClick={() => { setBatchItems([]); setPercent(0); setTaskId(null); setBatchStatus('idle'); try { localStorage.removeItem('watch_batch_tid') } catch {}; message.success('已清空任务状态') }}>清空任务</Button>
+              </Space>
+            </>
           )}
-          <Progress percent={percent} status={percent>=100? 'success' : 'active'} />
-          <Space>
-            <Button onClick={() => { cancelRef.current = true; setBatchStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
-            <Button danger onClick={() => { setBatchItems([]); setPercent(0); setTaskId(null); setBatchStatus('idle'); try { localStorage.removeItem('watch_batch_tid') } catch {}; message.success('已清空任务状态') }}>清空任务</Button>
-          </Space>
-           {batchItems && batchItems.length > 0 ? (
-             <Table
-               size="small"
-               rowKey={(r: any, idx: number) => String(r.股票代码 || idx)}
-               dataSource={batchItems}
-               columns={[
-                 { title: '股票代码', dataIndex: '股票代码', width: 120 },
-                 { title: '股票名称', dataIndex: '股票名称', width: 140 },
-                 { title: '评分', dataIndex: '评分', width: 80 },
-                 { title: '建议', dataIndex: '建议动作', width: 120, render: (_: any, r: any) => <ActionBadge action={r?.建议动作 || r?.操作建议} /> },
-                 { title: '理由摘要', dataIndex: '理由简述', render: (_: any, r: any) => r?.理由简述 || r?.分析理由摘要 || '-' },
-                 { title: '错误', dataIndex: '错误', width: 160 },
-               ] as any}
-               pagination={false}
-             />
-           ) : (
-             <Typography.Text type="secondary">等待结果返回…</Typography.Text>
-           )}
-         </Flex>
-       </Drawer>
+
+          {batchItems && batchItems.length > 0 ? (
+            <Table
+              size="small"
+              rowKey={(r) => r.股票代码}
+              dataSource={batchItems}
+              columns={[
+                { title: '股票代码', dataIndex: '股票代码', width: 120 },
+                { title: '股票名称', dataIndex: '股票名称', width: 140 },
+                { title: '评分', dataIndex: '评分', width: 80 },
+                { title: '建议动作', dataIndex: '建议动作', width: 120, render: (v: any) => <ActionBadge action={v} /> },
+                { title: '理由简述', dataIndex: '理由简述' },
+                { title: '错误', dataIndex: '错误', width: 160 },
+              ] as any}
+              pagination={false}
+            />
+          ) : (
+            <Typography.Text type="secondary">暂无结果</Typography.Text>
+          )}
+        </Space>
+      </Drawer>
     </div>
   )
 }
