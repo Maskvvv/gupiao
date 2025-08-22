@@ -855,6 +855,8 @@ def watchlist_list():
                 # 可选调试：起始价/当前价（前端可不展示）
                 "起始价": start_price,
                 "当前价": last_price,
+                # 新增：返回AI详细分析，便于前端直接展示
+                "AI详细分析": (last.ai_advice if last else None),
             })
     return {"items": results}
 
@@ -938,7 +940,9 @@ def watchlist_analyze_batch_start(req: WatchlistBatchAnalyzeRequest):
                     "股票名称": stock_name,
                     "评分": round(float(analysis.get("score", 0.0)), 2) if analysis.get("score") is not None else None,
                     "建议动作": analysis.get("action"),
-                    "理由简述": (((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason") or "").strip()
+                    "理由简述": (((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason") or "").strip(),
+                    # 可选：批量结果里也带上AI详细文本
+                    "AI详细分析": analysis.get("ai_advice"),
                 })
                 done += 1
                 PROGRESS_STORE[task].update({"done": done, "percent": int(done*100/max(total,1))})

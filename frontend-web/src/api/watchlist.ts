@@ -6,6 +6,7 @@ export type WatchItem = {
   综合评分?: number | null
   操作建议?: string | null
   分析理由摘要?: string | null
+  AI详细分析?: string | null
   最近分析时间?: string | null
   加入日期?: string | null
   '累计涨跌幅(%)'?: number | null
@@ -63,6 +64,7 @@ export type BatchResultItem = {
   评分?: number | null
   建议动作?: string | null
   理由简述?: string | null
+  AI详细分析?: string | null
   错误?: string | null
 }
 export type BatchResultResp = { items?: BatchResultItem[]; status?: string; error?: string }

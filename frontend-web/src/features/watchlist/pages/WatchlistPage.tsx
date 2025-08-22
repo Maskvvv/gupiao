@@ -211,14 +211,14 @@ export default function WatchlistPage() {
       title: '理由摘要',
       dataIndex: '分析理由摘要',
       width: 300,
-      render: (text: string | null) => {
+      render: (text: string | null, r: WatchItem) => {
         const t = (text ?? '').trim()
         const clickable = !!t
         return (
           <Typography.Paragraph
             style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
             ellipsis={{ tooltip: t || undefined }}
-            onClick={() => clickable && (setDetailText(t), setDetailOpen(true))}
+            onClick={() => clickable && (setDetailText((r as any)?.AI详细分析 || t), setDetailOpen(true))}
           >
             {t || '-'}
           </Typography.Paragraph>
@@ -356,17 +356,16 @@ export default function WatchlistPage() {
                 { title: '时间', dataIndex: '时间', key: 't', width: 180 },
                 { title: '评分', dataIndex: '综合评分', key: 's', width: 80 },
                 { title: '建议', dataIndex: '操作建议', key: 'a', width: 120, render: (v: any) => <ActionBadge action={v} /> },
-                // removed duplicate: 理由摘要 ellipsis-only column
                 {
                   title: '理由摘要', dataIndex: '分析理由摘要', key: 'b', width: 300,
-                  render: (text: string | null) => {
+                  render: (text: string | null, record: any) => {
                     const t = (text ?? '').trim()
                     const clickable = !!t
                     return (
                       <Typography.Paragraph
                         style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
                         ellipsis={{ tooltip: t || undefined }}
-                        onClick={() => clickable && (setDetailText(t), setDetailOpen(true))}
+                        onClick={() => clickable && (setDetailText(record?.AI详细分析 || t), setDetailOpen(true))}
                       >
                         {t || '-'}
                       </Typography.Paragraph>
@@ -417,14 +416,14 @@ export default function WatchlistPage() {
                 { title: '建议动作', dataIndex: '建议动作', width: 120, render: (v: any) => <ActionBadge action={v} /> },
                 {
                   title: '理由简述', dataIndex: '理由简述', width: 300,
-                  render: (text: string | null) => {
+                  render: (text: string | null, record: any) => {
                     const t = (text ?? '').trim()
                     const clickable = !!t
                     return (
                       <Typography.Paragraph
                         style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
                         ellipsis={{ tooltip: t || undefined }}
-                        onClick={() => clickable && (setDetailText(t), setDetailOpen(true))}
+                        onClick={() => clickable && (setDetailText(record?.AI详细分析 || t), setDetailOpen(true))}
                       >
                         {t || '-'}
                       </Typography.Paragraph>
