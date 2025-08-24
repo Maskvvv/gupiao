@@ -225,22 +225,22 @@ export default function WatchlistPage() {
         )
       }
     },
-    { title: '加入日期', dataIndex: '加入日期', width: 110 },
-    { title: '累计涨跌幅', dataIndex: '累计涨跌幅(%)', width: 110, render: (v: number | null) => {
+    { title: '加入日期', dataIndex: '加入日期', width: 110, className: 'hide-xs' },
+    { title: '累计涨跌幅', dataIndex: '累计涨跌幅(%)', width: 110, className: 'hide-sm', render: (v: number | null) => {
       if (v === null || v === undefined || isNaN(Number(v))) return '-'
       const num = Number(v)
       const color = num > 0 ? '#cf1322' : (num < 0 ? '#52c41a' : undefined)
       const sign = num > 0 ? '+' : ''
       return <span style={{ color }}>{sign}{num.toFixed(2)}%</span>
     } },
-    { title: '累计涨跌额', dataIndex: '累计涨跌额', width: 110, render: (v: number | null) => {
+    { title: '累计涨跌额', dataIndex: '累计涨跌额', width: 110, className: 'hide-sm', render: (v: number | null) => {
       if (v === null || v === undefined || isNaN(Number(v))) return '-'
       const num = Number(v)
       const color = num > 0 ? '#cf1322' : (num < 0 ? '#52c41a' : undefined)
       const sign = num > 0 ? '+' : ''
       return <span style={{ color }}>{sign}{num.toFixed(2)}</span>
     } },
-    { title: '最近分析时间', dataIndex: '最近分析时间', width: 180 },
+    { title: '最近分析时间', dataIndex: '最近分析时间', width: 180, className: 'hide-sm' },
     {
       title: '操作', key: 'ops', width: 140, fixed: 'right',
       render: (_: any, r: WatchItem) => (
@@ -338,7 +338,7 @@ export default function WatchlistPage() {
         </div>
        </Card>
 
-      <Drawer title={`${histSymbol || ''} 历史分析`} width={720} open={openHist} onClose={() => setOpenHist(false)} destroyOnClose>
+      <Drawer title={`${histSymbol || ''} 历史分析`} width={Math.min(720, Math.max(320, vw - 24))} open={openHist} onClose={() => setOpenHist(false)} destroyOnClose>
         {fetchingHist ? '加载中...' : (
           <>
             {(hist?.items?.length || 0) > 0 && (
@@ -353,28 +353,29 @@ export default function WatchlistPage() {
               rowKey={(_, idx) => String(idx)}
               dataSource={hist?.items || []}
               columns={[
-                { title: '时间', dataIndex: '时间', key: 't', width: 180 },
-                { title: '评分', dataIndex: '综合评分', key: 's', width: 80 },
-                { title: '建议', dataIndex: '操作建议', key: 'a', width: 120, render: (v: any) => <ActionBadge action={v} /> },
-                {
-                  title: '理由摘要', dataIndex: '分析理由摘要', key: 'b', width: 300,
-                  render: (text: string | null, record: any) => {
-                    const t = (text ?? '').trim()
-                    const clickable = !!t
-                    return (
-                      <Typography.Paragraph
-                        style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
-                        ellipsis={{ tooltip: t || undefined }}
-                        onClick={() => clickable && (setDetailText(record?.AI详细分析 || t), setDetailOpen(true))}
-                      >
-                        {t || '-'}
-                      </Typography.Paragraph>
-                    )
-                  }
-                },
-                { title: '错误', dataIndex: '错误', width: 160 },
-              ] as any}
-              pagination={false}
+                 { title: '时间', dataIndex: '时间', key: 't', width: 180 },
+                 { title: '评分', dataIndex: '综合评分', key: 's', width: 80 },
+                 { title: '建议', dataIndex: '操作建议', key: 'a', width: 120, render: (v: any) => <ActionBadge action={v} /> },
+                 {
+                   title: '理由摘要', dataIndex: '分析理由摘要', key: 'b', width: 300,
+                   render: (text: string | null, record: any) => {
+                     const t = (text ?? '').trim()
+                     const clickable = !!t
+                     return (
+                       <Typography.Paragraph
+                         style={{ margin: 0, width: '100%', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default' }}
+                         ellipsis={{ tooltip: t || undefined }}
+                         onClick={() => clickable && (setDetailText(record?.AI详细分析 || t), setDetailOpen(true))}
+                       >
+                         {t || '-'}
+                       </Typography.Paragraph>
+                     )
+                   }
+                 },
+                 { title: '错误', dataIndex: '错误', width: 160 },
+               ] as any}
+               pagination={false}
+               scroll={{ x: 'max-content' }}
             />
             <Flex justify="end" style={{ marginTop: 12 }}>
               <Pagination
@@ -389,7 +390,7 @@ export default function WatchlistPage() {
         )}
       </Drawer>
 
-      <Drawer title="批量分析" width={720} open={batchOpen} onClose={() => { cancelRef.current = true; setBatchOpen(false); /* 不清除 taskId/localStorage，便于后续恢复 */ }} destroyOnClose>
+      <Drawer title="批量分析" width={Math.min(720, Math.max(320, vw - 24))} open={batchOpen} onClose={() => { cancelRef.current = true; setBatchOpen(false); /* 不清除 taskId/localStorage，便于后续恢复 */ }} destroyOnClose>
          <Space direction="vertical" style={{ width: '100%' }} size={12}>
           {batchStatus !== 'idle' && (
             <>
@@ -440,7 +441,7 @@ export default function WatchlistPage() {
         </Space>
       </Drawer>
       {/* 理由详情弹窗 */}
-      <Modal title="理由详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={640}>
+      <Modal title="理由详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={Math.min(640, Math.max(320, vw - 24))}>
         <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
           {detailText || '-'}
         </Typography.Paragraph>

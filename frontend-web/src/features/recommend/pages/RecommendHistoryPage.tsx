@@ -69,7 +69,7 @@ export default function RecommendHistoryPage() {
                   <Button size="small" onClick={async ()=>{
                     try {
                       const d = await getRecommendDetails(r.id)
-                      modal.info({ title: `记录 ${d.id} 详情`, width: 720, content: (
+                      modal.info({ title: `记录 ${d.id} 详情`, width: Math.min(720, Math.max(320, window.innerWidth - 24)), content: (
                         <div style={{ maxHeight: 480, overflow: 'auto' }}>
                           {d.items?.map((it:any)=> (
                             <div key={it.股票代码} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
@@ -107,3 +107,56 @@ export default function RecommendHistoryPage() {
     </div>
   )
 }
+
+<div className="table-responsive">
+  <Table
+    sticky
+    size="small"
+    loading={isLoading}
+    rowKey={(r)=>String(r.id)}
+    dataSource={data?.records || []}
+    columns={[
+      { title: 'ID', dataIndex: 'id', width: 80, className: 'hide-xs' },
+      { title: '时间', dataIndex: 'created_at', width: 180 },
+      { title: '周期', dataIndex: 'period', width: 120, className: 'hide-sm' },
+      { title: '类型', dataIndex: 'recommend_type', width: 120, render: (v: string)=> typeTag(v) },
+      { title: '状态', dataIndex: 'status', width: 100, className: 'hide-sm', render: (_: any)=> <Tag color="success">已完成</Tag> },
+      { title: '候选/入选', key: 'cnt', width: 140, className: 'hide-sm', render: (_:any, r:any)=> `${r.total_candidates}/${r.top_n}` },
+      { title: '摘要', dataIndex: 'summary' },
+      {
+        title: '操作', key: 'ops', width: 220, fixed: 'right', render: (_:any, r:any)=> (
+          <Space>
+            <Button size="small" onClick={async ()=>{
+              try {
+                const d = await getRecommendDetails(r.id)
+                modal.info({ title: `记录 ${d.id} 详情`, width: Math.min(720, Math.max(320, window.innerWidth - 24)), content: (
+                  <div style={{ maxHeight: 480, overflow: 'auto' }}>
+                    {d.items?.map((it:any)=> (
+                      <div key={it.股票代码} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
+                        <div style={{ fontWeight: 600 }}>{it.股票名称}（{it.股票代码}）</div>
+                        <div>评分：{it.评分} 建议：<Tag color={it.建议动作==='buy'?'green':it.建议动作==='sell'?'red':'gold'}>{it.建议动作}</Tag></div>
+                        <div>理由：{it.理由简述}</div>
+                        {it.AI详细分析 ? (
+                          <Typography.Paragraph type="secondary" ellipsis={{ rows: 8, expandable: true, symbol: '展开AI分析' }} style={{ marginBottom: 0 }}>
+                            <b>AI详细分析：</b>{it.AI详细分析}
+                          </Typography.Paragraph>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) })
+              } catch (e: any) {
+                message.error(e?.message || '获取详情失败')
+              }
+            }}>查看</Button>
+            <Popconfirm title="确认删除该记录？" okText="删除" cancelText="取消" onConfirm={()=> mDelete.mutate(r.id)}>
+              <Button size="small" danger loading={mDelete.isPending}>删除</Button>
+            </Popconfirm>
+          </Space>
+        )
+      },
+    ]}
+    scroll={{ x: 'max-content' }}
+    pagination={false}
+  />
+</div>
