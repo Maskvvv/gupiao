@@ -3,6 +3,7 @@ import { App, Button, Card, DatePicker, Flex, Pagination, Space, Table, Tag, Pop
 import dayjs from 'dayjs'
 import { deleteRecommend, getRecommendDetails, getRecommendHistory } from '@/api/recommend'
 import { useState } from 'react'
+import { addWatch } from '@/api/watchlist'
 
 export default function RecommendHistoryPage() {
   const qc = useQueryClient()
@@ -21,6 +22,12 @@ export default function RecommendHistoryPage() {
     mutationFn: (id: number) => deleteRecommend(id),
     onSuccess: () => { message.success('已删除'); qc.invalidateQueries({ queryKey: ['rec-history'] }) },
     onError: (e: any) => message.error(e.message || '删除失败'),
+  })
+
+  const mAdd = useMutation({
+    mutationFn: (code: string) => addWatch(code),
+    onSuccess: () => { message.success('已加入自选'); qc.invalidateQueries({ queryKey: ['watchlist'] }) },
+    onError: (e: any) => message.error(e.message || '加入失败'),
   })
 
   const presets = [
@@ -81,6 +88,9 @@ export default function RecommendHistoryPage() {
                                   <b>AI详细分析：</b>{it.AI详细分析}
                                 </Typography.Paragraph>
                               ) : null}
+                              <Flex justify="end" style={{ marginTop: 6 }}>
+                                <Button size="small" onClick={()=>mAdd.mutate(it.股票代码)} loading={mAdd.isPending}>加入自选</Button>
+                              </Flex>
                             </div>
                           ))}
                         </div>
