@@ -57,6 +57,7 @@ export type KeywordStartPayload = {
   weights?: Record<string, number>
   exclude_st?: boolean
   min_market_cap?: number
+  board?: 'main' | 'gem' | 'star'
   provider?: string
   temperature?: number
   api_key?: string
@@ -81,4 +82,25 @@ export async function getKeywordStatus(task_id: string) {
 export async function getKeywordResult(task_id: string) {
   const r = await http.get(`/api/recommend/keyword/result/${encodeURIComponent(task_id)}`)
   return r.data as KeywordTaskResult
+}
+
+// 全市场推荐：请求类型与函数
+export type MarketRecommendPayload = {
+  period?: string
+  max_candidates?: number
+  weights?: Record<string, number>
+  exclude_st?: boolean
+  min_market_cap?: number
+  board?: 'main' | 'gem' | 'star'
+  provider?: string
+  temperature?: number
+  api_key?: string
+}
+
+export async function recommendMarket(payload: MarketRecommendPayload = {}) {
+  const r = await http.post<{ recommendations: RecommendItem[]; rec_id: number; total_screened?: number }>(
+    '/api/recommend/market',
+    payload
+  )
+  return r.data
 }

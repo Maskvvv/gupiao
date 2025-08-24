@@ -120,6 +120,7 @@ class MarketRecommendationRequest(BaseModel):
     weights: Optional[Dict[str, float]] = None
     exclude_st: bool = True
     min_market_cap: Optional[float] = None
+    board: Optional[str] = None
     # AI参数
     provider: Optional[str] = None
     temperature: Optional[float] = None
@@ -132,7 +133,7 @@ class KeywordRecommendationRequest(BaseModel):
     weights: Optional[Dict[str, float]] = None
     exclude_st: bool = True
     min_market_cap: Optional[float] = None
-    # AI参数
+    board: Optional[str] = None
     provider: Optional[str] = None
     temperature: Optional[float] = None
     api_key: Optional[str] = None
@@ -284,6 +285,9 @@ def recommend_market_wide(req: MarketRecommendationRequest):
         analyses = analyzer.auto_screen_market(
             max_candidates=req.max_candidates,
             weights=req.weights,
+            exclude_st=req.exclude_st,
+            min_market_cap=req.min_market_cap,
+            board=req.board,
             ai_params={
                 "provider": req.provider,
                 "temperature": req.temperature,
@@ -486,6 +490,87 @@ def recommend_result(task_id: str):
         return {"error": info.get("error")}
     return {"status": info.get("status")}
 
+@router.post("/recommend/keyword/start")
+def recommend_keyword_start(req: KeywordRecommendationRequest):
+    """启动关键词筛选任务，返回task_id用于查询进度与结果"""
+    task_id = uuid.uuid4().hex
+    PROGRESS_STORE[task_id] = {"status": "running", "done": 0, "total": 0, "error": None}
+
+    def worker(req_obj: KeywordRecommendationRequest, task: str):
+        analyzer = EnhancedAnalyzer()
+        fetcher = DataFetcher()
+        try:
+            # 进度回调：按阶段更新
+            def progress_callback(done, total):
+                overall_percent = int((done / max(total, 1)) * 100) if total > 0 else 0
+                if done < 1:
+                    phase = "screen"; screen_p = 0 if done <= 0 else int(done * 100); analyze_p = 0
+                elif 1 <= done < 2:
+                    phase = "analyze"; screen_p = 100; analyze_p = int(max(0.0, min(1.0, done - 1.0)) * 100)
+                else:
+                    phase = "done"; screen_p = 100; analyze_p = 100
+                PROGRESS_STORE[task].update({
+                    "done": done, "total": total, "percent": overall_percent,
+                    "phase": phase, "phases": {"screen": screen_p, "analyze": analyze_p},
+                })
+
+            ai_params = {"provider": req_obj.provider, "temperature": req_obj.temperature, "api_key": req_obj.api_key}
+            t0 = time.time()
+            analyses = analyzer.keyword_screen_market(
+                keyword=req_obj.keyword, period=req_obj.period, max_candidates=req_obj.max_candidates,
+                weights=req_obj.weights, exclude_st=req_obj.exclude_st, min_market_cap=req_obj.min_market_cap,
+                board=req_obj.board, ai_params=ai_params, progress_callback=progress_callback
+            )
+            t1 = time.time()
+            print(f"[KW-Task] analyzer finished task={task} results={len(analyses)} elapsed={t1-t0:.2f}s")
+
+            candidates = []
+            for analysis in analyses:
+                if analysis.get("valid"):
+                    symbol = analysis.get("symbol")
+                    info = fetcher.get_stock_info(symbol)
+                    stock_name = (info.get('股票简称') if info else None) or f"股票{symbol}"
+                    ai_text = (analysis.get("ai_advice") or "").strip()
+                    brief = (ai_text.split("\n")[0].strip("。 .") + "。") if ai_text else (analysis.get("action_reason", "无详细理由").split("。")[0] + "。")
+                    candidates.append({
+                        "股票代码": symbol, "股票名称": stock_name, "评分": round(analysis.get("score", 0.0), 2),
+                        "建议动作": analysis.get("action"), "理由简述": brief, "AI详细分析": ai_text, "_ai_advice": ai_text,
+                    })
+
+            candidates.sort(key=lambda x: x["评分"], reverse=True)
+            desired = int(req_obj.max_candidates or 5)
+            top_list = candidates[:desired]
+            filtered_count = len(candidates)
+
+            rec_id = None
+            if top_list:
+                with SessionLocal() as db:
+                    rec = Recommendation(
+                        created_at=now_bj(), period=req_obj.period, total_candidates=filtered_count,
+                        top_n=len(top_list), weights_config=json.dumps(req_obj.weights) if req_obj.weights else None,
+                        recommend_type="keyword"
+                    )
+                    db.add(rec); db.flush()
+                    for item in top_list:
+                        db.add(RecommendationItem(
+                            rec_id=rec.id, symbol=item["股票代码"], name=item["股票名称"], score=item["评分"],
+                            action=item["建议动作"], reason_brief=item["理由简述"], ai_advice=item.get("_ai_advice")
+                        ))
+                    db.commit(); rec_id = rec.id
+
+            for it in top_list:
+                it.pop("_ai_advice", None)
+
+            PROGRESS_STORE[task].update({
+                "status": "done", "phase": "done", "phases": {"screen": 100, "analyze": 100},
+                "result": {"recommendations": top_list, "rec_id": rec_id, "filtered_count": filtered_count}
+            })
+        except Exception as e:
+            PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
+
+    threading.Thread(target=worker, args=(req, task_id), daemon=True).start()
+    return {"task_id": task_id}
+
 @router.post("/recommend/market/start")
 def recommend_market_start(req: MarketRecommendationRequest):
     """启动全市场自动推荐任务，返回task_id用于查询进度与结果"""
@@ -496,173 +581,23 @@ def recommend_market_start(req: MarketRecommendationRequest):
         analyzer = EnhancedAnalyzer()
         fetcher = DataFetcher()
         try:
-            # 进度回调：更新完成数和总数
             def on_progress(done: int, total: int):
                 PROGRESS_STORE[task].update({"done": done, "total": total})
-            analyses = analyzer.auto_screen_market(
-                max_candidates=req.max_candidates,
-                weights=req.weights,
-                ai_params={
-                    "provider": req.provider,
-                    "temperature": req.temperature,
-                    "api_key": req.api_key,
-                },
-                progress_callback=on_progress,
-            )
-            # 构造候选并持久化（复用现有逻辑）
-            candidates = []
-            for analysis in analyses:
-                if analysis.get("valid"):
-                    symbol = analysis.get("symbol")
-                    info = fetcher.get_stock_info(symbol)
-                    stock_name = (info.get('股票简称') if info else None) or f"股票{symbol}"
-                    ai_text = (analysis.get("ai_advice") or "").strip()
-                    brief = (ai_text.split("\n")[0].strip("。.") + "。") if ai_text else (analysis.get("action_reason", "无详细理由").split("。")[0] + "。")
-                    candidates.append({
-                        "股票代码": symbol,
-                        "股票名称": stock_name,
-                        "评分": round(analysis.get("score", 0.0), 2),
-                        "建议动作": analysis.get("action"),
-                        "理由简述": brief,
-                        "_ai_advice": ai_text,
-                    })
-            candidates.sort(key=lambda x: x["评分"], reverse=True)
-            desired = 10 if len(candidates) >= 10 else (5 if len(candidates) >= 5 else len(candidates))
-            top_list = candidates[:desired]
-            top_n = len(top_list)
 
-            rec_id = None
-            if top_list:
-                with SessionLocal() as db:
-                    rec = Recommendation(
-                        created_at=now_bj(),
-                        period=req.period,
-                        total_candidates=len(candidates),
-                        top_n=top_n,
-                        weights_config=json.dumps(req.weights) if req.weights else None,
-                        recommend_type="market_wide"
-                    )
-                    db.add(rec)
-                    db.flush()
-                    for item in top_list:
-                        db.add(RecommendationItem(
-                            rec_id=rec.id,
-                            symbol=item["股票代码"],
-                            name=item["股票名称"],
-                            score=item["评分"],
-                            action=item["建议动作"],
-                            reason_brief=item["理由简述"],
-                            ai_advice=item.get("_ai_advice")
-                        ))
-                    db.commit()
-                    rec_id = rec.id
-            for it in top_list:
-                it.pop("_ai_advice", None)
-            PROGRESS_STORE[task].update({
-                "status": "done",
-                "result": {
-                    "recommendations": top_list,
-                    "rec_id": rec_id,
-                    "total_screened": len(candidates),
-                    "weights_used": req.weights or analyzer.default_weights,
-                }
-            })
-        except Exception as e:
-            PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
-
-    threading.Thread(target=worker, args=(req, task_id), daemon=True).start()
-    return {"task_id": task_id}
-
-@router.get("/recommend/market/status/{task_id}")
-def recommend_market_status(task_id: str):
-    info = PROGRESS_STORE.get(task_id)
-    if not info:
-        return {"status": "not_found"}
-    done = info.get("done", 0)
-    total = info.get("total", 0) or 1
-    percent = int(done * 100 / total) if total else 0
-    return {"status": info.get("status"), "done": done, "total": total, "percent": percent}
-
-@router.get("/recommend/market/result/{task_id}")
-def recommend_market_result(task_id: str):
-    info = PROGRESS_STORE.get(task_id, {})
-    if not info:
-        return {"status": "not_found"}
-    if info.get("status") == "done":
-        return info.get("result", {})
-    elif info.get("status") == "error":
-        return {"error": info.get("error")}
-    else:
-        return {"status": info.get("status")}
-
-# 关键词推荐异步任务接口
-@router.post("/recommend/keyword/start")
-def recommend_keyword_start(req: KeywordRecommendationRequest):
-    task_id = str(uuid.uuid4())
-    PROGRESS_STORE[task_id] = {
-        "status": "running",
-        "done": 0,
-        "total": 0,
-        "percent": 0,
-        # 新增阶段性进度
-        "phase": "screen",  # screen | analyze | done
-        "phases": {"screen": 0, "analyze": 0},
-    }
-    
-    def worker(req_obj, task):
-        try:
-            print(f"[KW-Task] start task={task} keyword={req_obj.keyword!r} period={req_obj.period} max={req_obj.max_candidates} exclude_st={req_obj.exclude_st} min_cap={req_obj.min_market_cap} provider={req_obj.provider}")
-            analyzer = EnhancedAnalyzer()
-            fetcher = DataFetcher()
-            ai_params = {
-                "provider": req_obj.provider,
-                "temperature": req_obj.temperature,
-                "api_key": req_obj.api_key
-            }
-            
-            def progress_callback(done, total):
-                # 将 analyzer.keyword_screen_market 的 0..2 / 2 进度拆分为两阶段
-                # done: 0 => 刚开始，1 => 第一阶段完成，(1,2) => 第二阶段进度，2 => 全部完成
-                overall_percent = int((done / max(total, 1)) * 100) if total > 0 else 0
-                if done < 1:
-                    phase = "screen"
-                    screen_p = 0 if done <= 0 else int(done * 100)  # 理论上只有0
-                    analyze_p = 0
-                elif 1 <= done < 2:
-                    phase = "analyze"
-                    screen_p = 100
-                    analyze_p = int(max(0.0, min(1.0, done - 1.0)) * 100)
-                else:
-                    phase = "done"
-                    screen_p = 100
-                    analyze_p = 100
-                PROGRESS_STORE[task].update({
-                    "done": done,
-                    "total": total,
-                    "percent": overall_percent,
-                    "phase": phase,
-                    "phases": {"screen": screen_p, "analyze": analyze_p},
-                })
-                # 关键节点日志
-                if done in (0, 1, 2):
-                    print(f"[KW-Task] progress task={task} phase={phase} overall={overall_percent}% screen={screen_p}% analyze={analyze_p}%")
-            
-            # 调用关键词筛选方法
+            ai_params = {"provider": req_obj.provider, "temperature": req_obj.temperature, "api_key": req_obj.api_key}
             t0 = time.time()
-            analyses = analyzer.keyword_screen_market(
-                keyword=req_obj.keyword,
-                period=req_obj.period,
+            analyses = analyzer.auto_screen_market(
                 max_candidates=req_obj.max_candidates,
                 weights=req_obj.weights,
                 exclude_st=req_obj.exclude_st,
                 min_market_cap=req_obj.min_market_cap,
-                progress_callback=progress_callback,
-                ai_params=ai_params
+                board=req_obj.board,
+                ai_params=ai_params,
+                progress_callback=on_progress
             )
             t1 = time.time()
-            print(f"[KW-Task] analyzer finished task={task} results={len(analyses)} elapsed={t1-t0:.2f}s")
-            
-            # 将分析结果映射为统一的候选结构（中文字段），以便前端展示与持久化
+            print(f"[MK-Task] analyzer finished task={task} results={len(analyses)} elapsed={t1-t0:.2f}s")
+
             candidates = []
             for analysis in analyses:
                 if analysis.get("valid"):
@@ -670,70 +605,36 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
                     info = fetcher.get_stock_info(symbol)
                     stock_name = (info.get('股票简称') if info else None) or f"股票{symbol}"
                     ai_text = (analysis.get("ai_advice") or "").strip()
-                    brief = (ai_text.split("\n")[0].strip("。 .") + "。") if ai_text else (analysis.get("action_reason", "无详细理由").split("。")[0] + "。")
+                    brief = (ai_text.split("\n")[0].strip("。. ") + "。") if ai_text else (analysis.get("action_reason", "无详细理由").split("。")[0] + "。")
                     candidates.append({
-                        "股票代码": symbol,
-                        "股票名称": stock_name,
-                        "评分": round(analysis.get("score", 0.0), 2),
-                        "建议动作": analysis.get("action"),
-                        "理由简述": brief,
-                        "AI详细分析": ai_text,
-                        "_ai_advice": ai_text,  # 内部字段，便于持久化
+                        "股票代码": symbol, "股票名称": stock_name, "评分": round(analysis.get("score", 0.0), 2),
+                        "建议动作": analysis.get("action"), "理由简述": brief, "AI详细分析": ai_text, "_ai_advice": ai_text,
                     })
-            
-            # 排序与Top-N
+
             candidates.sort(key=lambda x: x["评分"], reverse=True)
-            desired = int(req_obj.max_candidates or 5)
-            top_list = candidates[:desired]
-            filtered_count = len(candidates)
-            print(f"[KW-Task] mapped candidates task={task} filtered={filtered_count} top={len(top_list)}")
-            
-            # 保存推荐结果
+            top_list = candidates  # auto_screen_market 已经限制数量
             rec_id = None
             if top_list:
                 with SessionLocal() as db:
                     rec = Recommendation(
-                        created_at=now_bj(),
-                        period=req_obj.period,
-                        total_candidates=filtered_count,
-                        top_n=len(top_list),
-                        weights_config=json.dumps(req_obj.weights) if req_obj.weights else None,
-                        recommend_type="keyword"
+                        created_at=now_bj(), period=req_obj.period, total_candidates=len(candidates), top_n=len(top_list),
+                        weights_config=json.dumps(req_obj.weights) if req_obj.weights else None, recommend_type="market_wide"
                     )
-                    db.add(rec)
-                    db.flush()
+                    db.add(rec); db.flush()
                     for item in top_list:
                         db.add(RecommendationItem(
-                            rec_id=rec.id,
-                            symbol=item["股票代码"],
-                            name=item["股票名称"],
-                            score=item["评分"],
-                            action=item["建议动作"],
-                            reason_brief=item["理由简述"],
-                            ai_advice=item.get("_ai_advice")
+                            rec_id=rec.id, symbol=item["股票代码"], name=item["股票名称"], score=item["评分"],
+                            action=item["建议动作"], reason_brief=item["理由简述"], ai_advice=item.get("_ai_advice")
                         ))
-                    db.commit()
-                    rec_id = rec.id
-            
-            # 清理内部字段
+                    db.commit(); rec_id = rec.id
+
             for it in top_list:
                 it.pop("_ai_advice", None)
-            
-            PROGRESS_STORE[task].update({
-                "status": "done",
-                "phase": "done",
-                "phases": {"screen": 100, "analyze": 100},
-                "result": {
-                    "recommendations": top_list,
-                    "rec_id": rec_id,
-                    "filtered_count": filtered_count
-                }
-            })
-            print(f"[KW-Task] done task={task}")
+
+            PROGRESS_STORE[task].update({"status": "done", "result": {"recommendations": top_list, "rec_id": rec_id}})
         except Exception as e:
             PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
-            print(f"[KW-Task] error task={task} error={e}")
-    
+
     threading.Thread(target=worker, args=(req, task_id), daemon=True).start()
     return {"task_id": task_id}
 

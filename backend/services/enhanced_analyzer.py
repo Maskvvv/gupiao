@@ -182,7 +182,7 @@ class EnhancedAnalyzer:
         except Exception:
             return f"当前市场统计（{weights_desc}）：买入{buy_count}，持有{hold_count}，卖出{sell_count}，平均评分{avg_score:.2f}"
     
-    def auto_screen_market(self, max_candidates: int = 50, weights: Dict[str, float] = None, ai_params: Dict[str, Any] = None, progress_callback=None) -> List[Dict[str, Any]]:
+    def auto_screen_market(self, max_candidates: int = 50, weights: Dict[str, float] = None, exclude_st: bool = True, min_market_cap: float = None, board: str = None, ai_params: Dict[str, Any] = None, progress_callback=None) -> List[Dict[str, Any]]:
         """
         全市场自动筛选候选股票
         
@@ -195,7 +195,7 @@ class EnhancedAnalyzer:
         Returns:
             筛选出的候选股票分析结果
         """
-        market_stocks = self.get_market_stocks()
+        market_stocks = self.get_market_stocks(exclude_st=exclude_st, min_market_cap=min_market_cap, board=board)
         
         if not market_stocks:
             return []
@@ -216,7 +216,7 @@ class EnhancedAnalyzer:
     
     def keyword_screen_market(self, keyword: str, period: str = "1y", max_candidates: int = 50, 
                              weights: Dict[str, float] = None, exclude_st: bool = True, 
-                             min_market_cap: float = None, ai_params: Dict[str, Any] = None, 
+                             min_market_cap: float = None, board: str = None, ai_params: Dict[str, Any] = None, 
                              progress_callback=None) -> List[Dict[str, Any]]:
         """
         基于关键词的AI智能股票筛选
@@ -235,7 +235,7 @@ class EnhancedAnalyzer:
             筛选出的相关股票分析结果
         """
         # 获取全市场股票池
-        market_stocks = self.get_market_stocks(exclude_st=exclude_st, min_market_cap=min_market_cap)
+        market_stocks = self.get_market_stocks(exclude_st=exclude_st, min_market_cap=min_market_cap, board=board)
         
         if not market_stocks:
             return []
@@ -401,7 +401,7 @@ class EnhancedAnalyzer:
         
         return filtered_codes
 
-    def get_market_stocks(self, exclude_st: bool = True, min_market_cap: float = None) -> List[str]:
+    def get_market_stocks(self, exclude_st: bool = True, min_market_cap: float = None, board: str = None) -> List[str]:
         """
         获取全市场A股股票代码列表，并可选过滤：
         - exclude_st: 是否排除 ST/*ST 股票（通过名称包含“ST”判断）
@@ -467,6 +467,17 @@ class EnhancedAnalyzer:
                     parsed = df[mcap_col].map(parse_to_yi)
                     df = df[parsed.notna() & (parsed >= float(min_market_cap))]
 
+                # 板块过滤
+                if board:
+                    prefixes = (
+                        ['300'] if board == 'gem' else
+                        ['688'] if board == 'star' else
+                        ['000','001','002','003','004','600','601','603','605'] if board == 'main' else
+                        []
+                    )
+                    if prefixes:
+                        df = df[df[code_col].astype(str).str.startswith(tuple(prefixes))]
+
                 codes = [str(c).zfill(6) for c in df[code_col].astype(str).tolist() if str(c).isdigit()]
                 # 去重保持顺序
                 seen = set()
@@ -487,6 +498,17 @@ class EnhancedAnalyzer:
                     return []
                 if exclude_st and name_col is not None:
                     df2 = df2[~df2[name_col].astype(str).str.contains("ST", case=False, na=False)]
+                # 板块过滤
+                if board:
+                    prefixes = (
+                        ['300'] if board == 'gem' else
+                        ['688'] if board == 'star' else
+                        ['000','001','002','003','004','600','601','603','605'] if board == 'main' else
+                        []
+                    )
+                    if prefixes:
+                        df2 = df2[df2[code_col].astype(str).str.startswith(tuple(prefixes))]
+
                 codes = [str(c).zfill(6) for c in df2[code_col].astype(str).tolist() if str(c).isdigit()]
                 # 去重
                 seen = set()

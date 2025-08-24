@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { App, Button, Card, Divider, Flex, Input, Space, Typography, Progress, Skeleton, InputNumber } from 'antd'
+import { App, Button, Card, Divider, Flex, Input, Space, Typography, Progress, Skeleton, InputNumber, Segmented } from 'antd'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { addWatch } from '@/api/watchlist'
 import ActionBadge from '@/components/ActionBadge'
@@ -16,6 +16,7 @@ export default function KeywordRecommendPage() {
   const [provider, setProvider] = useState<string | undefined>(undefined)
   const [temperature, setTemperature] = useState<number | undefined>(undefined)
   const [apiKey, setApiKey] = useState<string | undefined>(undefined)
+  const [board, setBoard] = useState<'all'|'main'|'gem'|'star'>('all')
 
   const [taskId, setTaskId] = useState<string | null>(null)
   const [percent, setPercent] = useState(0)
@@ -42,6 +43,7 @@ export default function KeywordRecommendPage() {
         weights: undefined,
         exclude_st: excludeST,
         min_market_cap: minMktCap,
+        board: board === 'all' ? undefined : board,
         provider,
         temperature,
         api_key: apiKey,
@@ -123,6 +125,16 @@ export default function KeywordRecommendPage() {
       <Card title="关键词推荐" extra={
         <Flex gap={8}>
           <Input placeholder="输入关键词" value={keyword} onChange={e=>setKeyword(e.target.value)} onPressEnter={()=>mStart.mutate()} allowClear style={{ width: 200 }} />
+          <Segmented
+            options={[
+              { label: '全部', value: 'all' },
+              { label: '主板', value: 'main' },
+              { label: '创业板', value: 'gem' },
+              { label: '科创板', value: 'star' },
+            ]}
+            value={board}
+            onChange={(v)=>setBoard(v as any)}
+          />
           <Input placeholder="周期(如1y)" value={period} onChange={e=>setPeriod(e.target.value)} style={{ width: 100 }} />
           <InputNumber placeholder="候选上限" value={maxCandidates} onChange={(v)=>setMaxCandidates(Number(v||0))} style={{ width: 120 }} min={1} />
           <Input placeholder="最小市值(可空)" value={minMktCap ?? ''} onChange={e=>setMinMktCap(e.target.value ? Number(e.target.value) : undefined)} style={{ width: 140 }} />
