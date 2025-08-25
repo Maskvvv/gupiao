@@ -16,6 +16,10 @@ export type RecommendItem = {
   建议动作: string
   理由简述: string
   AI详细分析?: string | null
+  // 可选扩展字段：当来源于“推荐详情”接口或后端支持时会返回
+  AI信心?: number | null
+  AI信心原文?: string | null
+  融合分?: number | null
 }
 
 export async function recommend(config: RecommendConfig = {}) {

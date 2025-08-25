@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Divider, Flex, Input, Space, Typography, Skeleton, Segmented, InputNumber } from 'antd'
+import { App, Button, Card, Divider, Flex, Input, Space, Typography, Skeleton, Segmented, InputNumber, Tooltip } from 'antd'
 import { recommend, type RecommendItem, recommendMarket, type MarketRecommendPayload } from '@/api/recommend'
 import ActionBadge from '@/components/ActionBadge'
 import { useEffect, useMemo, useState } from 'react'
@@ -18,6 +18,9 @@ export default function RecommendPage() {
   const qc = useQueryClient()
 
   const isMarketWide = useMemo(() => symbols.split(',').map(s=>s.trim()).filter(Boolean).length === 0, [symbols])
+
+  // 数值格式化：两位小数；异常/空值返回 “-”
+  const fmt2 = (v: any) => (v === null || v === undefined || isNaN(Number(v)) ? '-' : Number(v).toFixed(2))
 
   const m = useMutation({
     mutationFn: async () => {
@@ -106,7 +109,11 @@ export default function RecommendPage() {
               {m.data.recommendations.map((it: RecommendItem) => (
                 <Card key={it.股票代码} size="small" title={`${it.股票名称} (${it.股票代码})`}>
                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                    <div>评分：<b>{it.评分}</b></div>
+                    <Flex gap={8} wrap align="center">
+                      <Tooltip title="技术面打分，范围 0-10"><span>技术分：<b>{fmt2(it.评分)}</b></span></Tooltip>
+                      <Tooltip title="AI 给出的分析信心，范围 0-10"><span>AI信心：<b>{fmt2((it as any)?.AI信心)}</b></span></Tooltip>
+                      <Tooltip title="融合分 = 技术分 与 AI信心 的加权融合，范围 0-10"><span>融合分：<b>{fmt2((it as any)?.融合分)}</b></span></Tooltip>
+                    </Flex>
                     <div>建议：<ActionBadge action={it.建议动作} /></div>
                     <Typography.Paragraph ellipsis={{ rows: 3, expandable: true, symbol: '更多' }}>{it.理由简述}</Typography.Paragraph>
                     {it.AI详细分析 ? (

@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from .analyzer import basic_analysis
 from .ai_router import AIRouter, AIRequest
+from .confidence_fusion import extract_confidence_and_fusion
 
 class EnhancedAnalyzer:
     """增强版分析器，集成AI建议与多维度权重配置"""
@@ -100,9 +101,14 @@ class EnhancedAnalyzer:
             tech_analysis["ai_advice"] = ai_advice
             # 记录使用的权重配置
             tech_analysis["weights_used"] = weights or self.default_weights
+            # 提取 AI 信心并计算融合分
+            tech_analysis = extract_confidence_and_fusion(tech_analysis, ai_advice)
         except Exception as e:
-            tech_analysis["ai_advice"] = f"AI分析暂时不可用: {str(e)}"
+            ai_msg = f"AI分析暂时不可用: {str(e)}"
+            tech_analysis["ai_advice"] = ai_msg
             tech_analysis["weights_used"] = weights or self.default_weights
+            # 即便AI异常，也尝试基于已有信息计算融合分（将回退到技术分）
+            tech_analysis = extract_confidence_and_fusion(tech_analysis, ai_msg)
             
         return tech_analysis
     

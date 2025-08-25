@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startBatchAnalyze, getBatchStatus, getBatchResult } from '@/api/watchlist'
-import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs, Dropdown } from 'antd'
+import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs, Dropdown, Tooltip } from 'antd'
 import ActionBadge from '@/components/ActionBadge'
 import ReactECharts from 'echarts-for-react'
 import { DownOutlined } from '@ant-design/icons'
@@ -89,6 +89,9 @@ export default function WatchlistPage() {
     enabled: !!histSymbol,
   })
 
+  // 统一数值显示：两位小数，空值为“-”
+  const fmt2 = (v: any) => (v === null || v === undefined || isNaN(Number(v)) ? '-' : Number(v).toFixed(2))
+
   // 历史评分趋势图配置（空数据也要兜底）
   const chartOption = useMemo(() => {
     const ds = (hist?.items || [])
@@ -98,7 +101,7 @@ export default function WatchlistPage() {
       tooltip: { trigger: 'axis' },
       grid: { left: 8, right: 8, top: 24, bottom: 24, containLabel: true },
       xAxis: { type: 'category', data: ds.map(d => d.t) },
-      yAxis: { type: 'value' },
+      yAxis: { type: 'value', min: 0, max: 10 },
       series: [{ type: 'line', data: ds.map(d => d.s), smooth: true, areaStyle: {}, symbol: 'circle' }],
     }
   }, [hist?.items])
@@ -202,10 +205,30 @@ export default function WatchlistPage() {
     } catch {}
   }, [])
 
+  // 数字格式化：两位小数（下方重复定义已移除，统一使用顶部 fmt2）
+
   const columns = [
     { title: '股票代码', dataIndex: '股票代码', width: 120 },
     { title: '股票名称', dataIndex: '股票名称', width: 140 },
-    { title: '综合评分', dataIndex: '综合评分', width: 100, render: (v: number | null) => v ?? '-' },
+    // 移除原“综合评分”列，改为“融合分”独立展示
+    {
+      title: '融合分',
+      dataIndex: '融合分',
+      width: 100,
+      render: (v: number | null, r: WatchItem) => (
+        <Tooltip
+          placement="top"
+          title={
+            <div style={{ lineHeight: 1.5 }}>
+              <div>技术分：{fmt2(r.综合评分)}</div>
+              <div>AI信心：{fmt2((r as any)?.AI信心)}</div>
+            </div>
+          }
+        >
+          <span>{fmt2(v)}</span>
+        </Tooltip>
+      )
+    },
     { title: '操作建议', dataIndex: '操作建议', width: 120, render: (v: string | null) => <ActionBadge action={v} /> },
     {
       title: '理由摘要',
@@ -258,13 +281,10 @@ export default function WatchlistPage() {
               key === 'history' ? (setHistSymbol(r.股票代码), setOpenHist(true), refetchHist()) :
               key === 'quote' ? (setQuoteSymbol(r.股票代码), setOpenQuote(true)) :
               key === 'remove' ? mRemove.mutate(r.股票代码) : void 0
-            ),
+            )
           }}
-          trigger={['click']}
         >
-          <a onClick={(e) => e.preventDefault()}>
-            操作 <DownOutlined />
-          </a>
+          <a onClick={e => e.preventDefault()}>更多 <DownOutlined /></a>
         </Dropdown>
       )
     },
@@ -354,7 +374,9 @@ export default function WatchlistPage() {
               dataSource={hist?.items || []}
               columns={[
                  { title: '时间', dataIndex: '时间', key: 't', width: 180 },
-                 { title: '评分', dataIndex: '综合评分', key: 's', width: 80 },
+                 { title: '技术分', dataIndex: '综合评分', key: 's', width: 80, render: (v: any) => fmt2(v) },
+                 { title: 'AI信心', dataIndex: 'AI信心', key: 'c', width: 80, render: (v: any) => fmt2(v) },
+                 { title: '融合分', dataIndex: '融合分', key: 'f', width: 80, render: (v: any) => fmt2(v) },
                  { title: '建议', dataIndex: '操作建议', key: 'a', width: 120, render: (v: any) => <ActionBadge action={v} /> },
                  {
                    title: '理由摘要', dataIndex: '分析理由摘要', key: 'b', width: 300,

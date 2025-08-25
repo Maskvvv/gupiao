@@ -89,9 +89,12 @@ def get_recommendation_details(rec_id: int):
                 "评分": item.score,
                 "建议动作": item.action,
                 "理由简述": item.reason_brief,
-                "AI详细分析": item.ai_advice or "无AI分析"
+                "AI详细分析": item.ai_advice or "无AI分析",
+                "AI信心": (round(float(item.ai_confidence), 2) if item.ai_confidence is not None else None),
+                "AI信心原文": item.ai_confidence_raw,
+                "融合分": (round(float(item.fusion_score), 2) if item.fusion_score is not None else None),
             } for item in items]
-        }
+         }
 
 @rec_router.delete("/recommendations/{rec_id}")
 def delete_recommendation(rec_id: int):

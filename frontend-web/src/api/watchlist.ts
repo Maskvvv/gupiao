@@ -11,6 +11,9 @@ export type WatchItem = {
   加入日期?: string | null
   '累计涨跌幅(%)'?: number | null
   累计涨跌额?: number | null
+  // 新增字段：AI信心、融合分（用于Watchlist页面展示与Tooltip）
+  AI信心?: number | null
+  融合分?: number | null
 }
 
 export async function listWatchlist() {
@@ -38,7 +41,7 @@ export async function analyzeOne(
   if (opts?.weights) payload.weights = opts.weights
   if (opts?.provider) payload.provider = opts.provider
   if (typeof opts?.temperature === 'number') payload.temperature = opts.temperature
-  if (opts?.api_key) payload.api_key = opts.api_key
+  if (opts?.api_key) payload.api_key = opts?.api_key
   const r = await http.post('/api/watchlist/analyze', payload)
   return r.data
 }
@@ -49,6 +52,8 @@ export type HistoryItem = {
   操作建议?: string | null
   分析理由摘要?: string | null
   AI详细分析?: string | null
+  AI信心?: number | null
+  融合分?: number | null
 }
 
 export async function listHistory(symbol: string, page = 1, page_size = 10) {

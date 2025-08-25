@@ -67,6 +67,10 @@ class RecommendationItem(Base):
     action = Column(String(16))
     reason_brief = Column(Text)
     ai_advice = Column(Text)
+    # 新增：AI信心与融合分（0-10），保留原始解析文本
+    ai_confidence = Column(Float)  # 可空，AI未返回则为None
+    ai_confidence_raw = Column(String(255))  # AI文本中解析出的原始“信心”片段
+    fusion_score = Column(Float)  # 可空；无AI信心时可等于技术分
     rec = relationship("Recommendation", back_populates="items")
 
 # 自选股票表
@@ -86,6 +90,10 @@ class AnalysisRecord(Base):
     action = Column(String(16))
     reason_brief = Column(Text)
     ai_advice = Column(Text)
+    # 新增：AI信心与融合分（0-10），保留原始解析文本
+    ai_confidence = Column(Float)  # 可空，AI未返回则为None
+    ai_confidence_raw = Column(String(255))  # AI文本中解析出的原始“信心”片段
+    fusion_score = Column(Float)  # 可空；无AI信心时可等于技术分
     created_at = Column(DateTime, default=now_bj, index=True)
 
 # 确保表存在（幂等）
@@ -95,14 +103,64 @@ Base.metadata.create_all(engine)
 try:
     if engine.url.get_backend_name() == "sqlite":
         with engine.begin() as conn:
+            # recommendations 表：已有迁移（weights_config, recommend_type）
             cols = {row[1] for row in conn.execute(text("PRAGMA table_info(recommendations)")).fetchall()}
             if "weights_config" not in cols:
                 conn.execute(text("ALTER TABLE recommendations ADD COLUMN weights_config TEXT"))
+                print("[migrate] sqlite: added recommendations.weights_config")
             if "recommend_type" not in cols:
                 conn.execute(text("ALTER TABLE recommendations ADD COLUMN recommend_type VARCHAR(20) DEFAULT 'manual'"))
+                print("[migrate] sqlite: added recommendations.recommend_type")
+
+            # recommendation_items 表：新增 ai_confidence / ai_confidence_raw / fusion_score
+            ri_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(recommendation_items)")).fetchall()}
+            if "ai_confidence" not in ri_cols:
+                conn.execute(text("ALTER TABLE recommendation_items ADD COLUMN ai_confidence REAL"))
+                print("[migrate] sqlite: added recommendation_items.ai_confidence")
+            if "ai_confidence_raw" not in ri_cols:
+                conn.execute(text("ALTER TABLE recommendation_items ADD COLUMN ai_confidence_raw TEXT"))
+                print("[migrate] sqlite: added recommendation_items.ai_confidence_raw")
+            if "fusion_score" not in ri_cols:
+                conn.execute(text("ALTER TABLE recommendation_items ADD COLUMN fusion_score REAL"))
+                print("[migrate] sqlite: added recommendation_items.fusion_score")
+
+            # analysis_records 表：新增 ai_confidence / ai_confidence_raw / fusion_score
+            ar_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(analysis_records)")).fetchall()}
+            if "ai_confidence" not in ar_cols:
+                conn.execute(text("ALTER TABLE analysis_records ADD COLUMN ai_confidence REAL"))
+                print("[migrate] sqlite: added analysis_records.ai_confidence")
+            if "ai_confidence_raw" not in ar_cols:
+                conn.execute(text("ALTER TABLE analysis_records ADD COLUMN ai_confidence_raw TEXT"))
+                print("[migrate] sqlite: added analysis_records.ai_confidence_raw")
+            if "fusion_score" not in ar_cols:
+                conn.execute(text("ALTER TABLE analysis_records ADD COLUMN fusion_score REAL"))
+                print("[migrate] sqlite: added analysis_records.fusion_score")
+
+    elif engine.url.get_backend_name().startswith("mysql"):
+        # MySQL 迁移：检查列是否存在，不存在则添加
+        with engine.begin() as conn:
+            def ensure_mysql_column(table: str, col: str, ddl_type: str):
+                exists = conn.execute(text(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c"
+                ), {"t": table, "c": col}).scalar()
+                if not exists:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl_type} NULL"))
+                    print(f"[migrate] mysql: added {table}.{col} ({ddl_type})")
+
+            # recommendation_items
+            ensure_mysql_column("recommendation_items", "ai_confidence", "DECIMAL(4,2)")
+            ensure_mysql_column("recommendation_items", "ai_confidence_raw", "VARCHAR(255)")
+            ensure_mysql_column("recommendation_items", "fusion_score", "DECIMAL(4,2)")
+            # analysis_records
+            ensure_mysql_column("analysis_records", "ai_confidence", "DECIMAL(4,2)")
+            ensure_mysql_column("analysis_records", "ai_confidence_raw", "VARCHAR(255)")
+            ensure_mysql_column("analysis_records", "fusion_score", "DECIMAL(4,2)")
 except Exception as _e:
-    # 迁移失败不阻塞主流程，但会在首次插入时报错提示
-    pass
+    # 迁移失败不阻塞主流程，但记录提示，便于排查
+    try:
+        print(f"[migrate][warn] schema migration skipped/failed: {_e}")
+    except Exception:
+        pass
 
 class RecommendationRequest(BaseModel):
     symbols: List[str]
@@ -138,7 +196,6 @@ class KeywordRecommendationRequest(BaseModel):
     temperature: Optional[float] = None
     api_key: Optional[str] = None
 
-# 新增：自选相关请求模型
 class WatchlistAddRequest(BaseModel):
     symbol: str
 
@@ -164,33 +221,6 @@ def analyze_symbol(req: RecommendationRequest):
                 s,
                 df_compatible,
                 weights=req.weights,
-                ai_params={
-                    "provider": req.provider,
-                    "temperature": req.temperature,
-                    "api_key": req.api_key,
-                },
-            )
-            results.append({"symbol": s, **analysis})
-        else:
-            results.append({"symbol": s, "valid": False, "reason": "无法获取数据"})
-    return {"results": results}
-
-@router.post("/recommend")
-def recommend_symbols(req: RecommendationRequest):
-    fetcher = DataFetcher()
-    analyzer = EnhancedAnalyzer()
-    candidates = []
-    for s in req.symbols:
-        df = fetcher.get_stock_data(s, period=req.period)
-        if df is not None:
-            # 转换列名为兼容格式
-            df_compatible = df.reset_index()
-            df_compatible.columns = [col.lower() for col in df_compatible.columns]
-            # 使用AI综合分析（包含技术面+情绪/宏观+事件）
-            analysis = analyzer.analyze_with_ai(
-                s,
-                df_compatible,
-                weights=req.weights,
                 ai_params={"provider": req.provider, "temperature": req.temperature, "api_key": req.api_key},
             )
             if analysis.get("valid"):
@@ -207,7 +237,10 @@ def recommend_symbols(req: RecommendationRequest):
                     "建议动作": analysis.get("action"),
                     "理由简述": brief,
                     "AI详细分析": ai_text,
-                    "_ai_advice": ai_text,  # 内部字段，便于持久化
+                    "_ai_advice": ai_text,
+                    "_ai_confidence": analysis.get("ai_confidence"),
+                    "_ai_confidence_raw": analysis.get("ai_confidence_raw"),
+                    "_fusion_score": analysis.get("fusion_score"),
                 })
 
     # 如果 symbols 为空，尝试调用全市场筛选逻辑作为后备
@@ -235,7 +268,7 @@ def recommend_symbols(req: RecommendationRequest):
                 })
 
     # 排序并选取5-10只
-    candidates.sort(key=lambda x: x["评分"], reverse=True)
+    candidates.sort(key=lambda x: (x.get("_fusion_score") if ENABLE_FUSION_SORT else x.get("评分")) or x.get("评分"), reverse=True)
     # 需求为尽量推荐5-10只；若候选不足5只，则返回实际可用数量
     desired = 10 if len(candidates) >= 10 else (5 if len(candidates) >= 5 else len(candidates))
     top_list = candidates[:desired]
@@ -264,14 +297,20 @@ def recommend_symbols(req: RecommendationRequest):
                     score=item["评分"],
                     action=item["建议动作"],
                     reason_brief=item["理由简述"],
-                    ai_advice=item.get("_ai_advice")
+                    ai_advice=item.get("_ai_advice"),
+                    ai_confidence=item.get("_ai_confidence"),
+                    ai_confidence_raw=item.get("_ai_confidence_raw"),
+                    fusion_score=item.get("_fusion_score"),
                 ))
             db.commit()
             rec_id = rec.id
-
+    
     # 输出给前端时不暴露内部字段
     for it in top_list:
         it.pop("_ai_advice", None)
+        it.pop("_ai_confidence", None)
+        it.pop("_ai_confidence_raw", None)
+        it.pop("_fusion_score", None)
     return {"recommendations": top_list, "rec_id": rec_id}
 
 @router.post("/recommend/market")
@@ -281,20 +320,24 @@ def recommend_market_wide(req: MarketRecommendationRequest):
     fetcher = DataFetcher()
     
     try:
+        # 进度回调（本接口为同步执行，仅记录日志，避免 NameError）
+        def on_progress(done: int, total: int):
+            try:
+                print(f"[recommend/market] progress: {done}/{total}")
+            except Exception:
+                pass
+
         # 使用增强分析器的全市场筛选功能
+        ai_params = {"provider": req.provider, "temperature": req.temperature, "api_key": req.api_key}
         analyses = analyzer.auto_screen_market(
             max_candidates=req.max_candidates,
             weights=req.weights,
             exclude_st=req.exclude_st,
             min_market_cap=req.min_market_cap,
             board=req.board,
-            ai_params={
-                "provider": req.provider,
-                "temperature": req.temperature,
-                "api_key": req.api_key,
-            },
+            ai_params=ai_params,
+            progress_callback=on_progress
         )
-        
         candidates = []
         for analysis in analyses:
             if analysis.get("valid"):
@@ -311,16 +354,17 @@ def recommend_market_wide(req: MarketRecommendationRequest):
                     "评分": round(analysis.get("score", 0.0), 2),
                     "建议动作": analysis.get("action"),
                     "理由简述": brief,
+                    "AI详细分析": ai_text,
                     "_ai_advice": ai_text,
+                    "_ai_confidence": analysis.get("ai_confidence"),
+                    "_ai_confidence_raw": analysis.get("ai_confidence_raw"),
+                    "_fusion_score": analysis.get("fusion_score"),
                 })
         
-        # 排序并选取top 5-10
-        candidates.sort(key=lambda x: x["评分"], reverse=True)
-        desired = 10 if len(candidates) >= 10 else (5 if len(candidates) >= 5 else len(candidates))
-        top_list = candidates[:desired]
+        # 排序并选取top 5-10（auto_screen_market 已限制数量）
+        candidates.sort(key=lambda x: (x.get("_fusion_score") if ENABLE_FUSION_SORT else x.get("评分")) or x.get("评分"), reverse=True)
+        top_list = candidates
         top_n = len(top_list)
-        
-        # 持久化
         rec_id = None
         if top_list:
             with SessionLocal() as db:
@@ -343,7 +387,10 @@ def recommend_market_wide(req: MarketRecommendationRequest):
                         score=item["评分"],
                         action=item["建议动作"],
                         reason_brief=item["理由简述"],
-                        ai_advice=item.get("_ai_advice")
+                        ai_advice=item.get("_ai_advice"),
+                        ai_confidence=item.get("_ai_confidence"),
+                        ai_confidence_raw=item.get("_ai_confidence_raw"),
+                        fusion_score=item.get("_fusion_score"),
                     ))
                 db.commit()
                 rec_id = rec.id
@@ -351,7 +398,10 @@ def recommend_market_wide(req: MarketRecommendationRequest):
         # 移除内部字段
         for it in top_list:
             it.pop("_ai_advice", None)
-            
+            it.pop("_ai_confidence", None)
+            it.pop("_ai_confidence_raw", None)
+            it.pop("_fusion_score", None)
+        
         return {
             "recommendations": top_list, 
             "rec_id": rec_id,
@@ -360,6 +410,10 @@ def recommend_market_wide(req: MarketRecommendationRequest):
         }
         
     except Exception as e:
+        try:
+            print(f"[recommend/market][error] {e}")
+        except Exception:
+            pass
         return {"error": f"全市场推荐失败: {str(e)}", "recommendations": []}
 
 from fastapi import Body
@@ -376,6 +430,13 @@ def ai_suggest(
 
 # 新增：持久化相关
 PROGRESS_STORE: Dict[str, Dict[str, Any]] = {}
+
+# 启用“融合分排序”开关（默认关闭）；可通过环境变量 ENABLE_FUSION_SORT=1/true 开启
+ENABLE_FUSION_SORT = os.getenv("ENABLE_FUSION_SORT", "0").lower() in ("1", "true", "yes")
+try:
+    print(f"[config] ENABLE_FUSION_SORT={ENABLE_FUSION_SORT}")
+except Exception:
+    pass
 
 @router.post("/recommend/start")
 def recommend_start(req: RecommendationRequest):
@@ -420,9 +481,13 @@ def recommend_start(req: RecommendationRequest):
                         "建议动作": analysis.get("action"),
                         "理由简述": brief,
                         "_ai_advice": ai_text,
+                        "_ai_confidence": analysis.get("ai_confidence"),
+                        "_ai_confidence_raw": analysis.get("ai_confidence_raw"),
+                        "_fusion_score": analysis.get("fusion_score"),
                     })
             
-            candidates.sort(key=lambda x: x["评分"], reverse=True)
+            # 统一排序逻辑：可按融合分（开关控制），否则按技术评分
+            candidates.sort(key=lambda x: (x.get("_fusion_score") if ENABLE_FUSION_SORT else x.get("评分")) or x.get("评分"), reverse=True)
             desired = 10 if len(candidates) >= 10 else (5 if len(candidates) >= 5 else len(candidates))
             top_list = candidates[:desired]
             top_n = len(top_list)
@@ -535,9 +600,11 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
                     candidates.append({
                         "股票代码": symbol, "股票名称": stock_name, "评分": round(analysis.get("score", 0.0), 2),
                         "建议动作": analysis.get("action"), "理由简述": brief, "AI详细分析": ai_text, "_ai_advice": ai_text,
+                        "_ai_confidence": analysis.get("ai_confidence"), "_ai_confidence_raw": analysis.get("ai_confidence_raw"), "_fusion_score": analysis.get("fusion_score"),
                     })
 
-            candidates.sort(key=lambda x: x["评分"], reverse=True)
+            # 统一排序逻辑：可按融合分（开关控制），否则按技术评分
+            candidates.sort(key=lambda x: (x.get("_fusion_score") if ENABLE_FUSION_SORT else x.get("评分")) or x.get("评分"), reverse=True)
             desired = int(req_obj.max_candidates or 5)
             top_list = candidates[:desired]
             filtered_count = len(candidates)
@@ -554,13 +621,16 @@ def recommend_keyword_start(req: KeywordRecommendationRequest):
                     for item in top_list:
                         db.add(RecommendationItem(
                             rec_id=rec.id, symbol=item["股票代码"], name=item["股票名称"], score=item["评分"],
-                            action=item["建议动作"], reason_brief=item["理由简述"], ai_advice=item.get("_ai_advice")
+                            action=item["建议动作"], reason_brief=item["理由简述"], ai_advice=item.get("_ai_advice"),
+                            ai_confidence=item.get("_ai_confidence"), ai_confidence_raw=item.get("_ai_confidence_raw"), fusion_score=item.get("_fusion_score"),
                         ))
                     db.commit(); rec_id = rec.id
 
             for it in top_list:
                 it.pop("_ai_advice", None)
-
+                it.pop("_ai_confidence", None)
+                it.pop("_ai_confidence_raw", None)
+                it.pop("_fusion_score", None)
             PROGRESS_STORE[task].update({
                 "status": "done", "phase": "done", "phases": {"screen": 100, "analyze": 100},
                 "result": {"recommendations": top_list, "rec_id": rec_id, "filtered_count": filtered_count}
@@ -609,9 +679,10 @@ def recommend_market_start(req: MarketRecommendationRequest):
                     candidates.append({
                         "股票代码": symbol, "股票名称": stock_name, "评分": round(analysis.get("score", 0.0), 2),
                         "建议动作": analysis.get("action"), "理由简述": brief, "AI详细分析": ai_text, "_ai_advice": ai_text,
+                        "_ai_confidence": analysis.get("ai_confidence"), "_ai_confidence_raw": analysis.get("ai_confidence_raw"), "_fusion_score": analysis.get("fusion_score"),
                     })
 
-            candidates.sort(key=lambda x: x["评分"], reverse=True)
+            candidates.sort(key=lambda x: (x.get("_fusion_score") if ENABLE_FUSION_SORT else x.get("评分")) or x.get("评分"), reverse=True)
             top_list = candidates  # auto_screen_market 已经限制数量
             rec_id = None
             if top_list:
@@ -624,13 +695,16 @@ def recommend_market_start(req: MarketRecommendationRequest):
                     for item in top_list:
                         db.add(RecommendationItem(
                             rec_id=rec.id, symbol=item["股票代码"], name=item["股票名称"], score=item["评分"],
-                            action=item["建议动作"], reason_brief=item["理由简述"], ai_advice=item.get("_ai_advice")
+                            action=item["建议动作"], reason_brief=item["理由简述"], ai_advice=item.get("_ai_advice"),
+                            ai_confidence=item.get("_ai_confidence"), ai_confidence_raw=item.get("_ai_confidence_raw"), fusion_score=item.get("_fusion_score"),
                         ))
                     db.commit(); rec_id = rec.id
 
             for it in top_list:
                 it.pop("_ai_advice", None)
-
+                it.pop("_ai_confidence", None)
+                it.pop("_ai_confidence_raw", None)
+                it.pop("_fusion_score", None)
             PROGRESS_STORE[task].update({"status": "done", "result": {"recommendations": top_list, "rec_id": rec_id}})
         except Exception as e:
             PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
@@ -758,6 +832,9 @@ def watchlist_list():
                 "当前价": last_price,
                 # 新增：返回AI详细分析，便于前端直接展示
                 "AI详细分析": (last.ai_advice if last else None),
+                # 新增：返回 AI 信心 与 融合分（两位小数）
+                "AI信心": (round(float(last.ai_confidence), 2) if last and last.ai_confidence is not None else None),
+                "融合分": (round(float(last.fusion_score), 2) if last and last.fusion_score is not None else None),
             })
     return {"items": results}
 
@@ -786,7 +863,10 @@ def watchlist_analyze(req: WatchlistBatchAnalyzeRequest):
                 score=float(analysis.get("score", 0.0)) if analysis.get("score") is not None else None,
                 action=analysis.get("action"),
                 reason_brief=reason,
-                ai_advice=analysis.get("ai_advice")
+                ai_advice=analysis.get("ai_advice"),
+                ai_confidence=analysis.get("ai_confidence"),
+                ai_confidence_raw=analysis.get("ai_confidence_raw"),
+                fusion_score=analysis.get("fusion_score"),
             ))
             db.commit()
     return {"symbol": symbol, "analysis": analysis}
@@ -892,6 +972,8 @@ def watchlist_history(symbol: str, page: int = 1, page_size: int = 20):
             items.append({
                 "时间": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
                 "综合评分": round(float(r.score), 2) if r.score is not None else None,
+                "AI信心": round(float(r.ai_confidence), 2) if r.ai_confidence is not None else None,
+                "融合分": round(float(r.fusion_score), 2) if r.fusion_score is not None else None,
                 "操作建议": r.action,
                 "分析理由摘要": r.reason_brief,
                 "AI详细分析": r.ai_advice,
