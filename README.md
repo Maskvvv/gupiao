@@ -1,167 +1,90 @@
 # 股票数据分析与推荐系统 📈
 
-一个集成AI的智能股票分析系统，支持数据抓取、技术分析、推荐生成和可视化展示。
+面向 A 股/美股的数据抓取、技术面分析、AI 解读与推荐，以及可视化前端。
 
-## 功能特性 ✨
+## 功能特性
+- 多数据源：akshare / yfinance
+- 增强分析：技术指标打分 + AI 解读 + 融合分（EnhancedAnalyzer）
+- 推荐历史持久化：SQLite / MySQL（SQLAlchemy）
+- 异步任务：长耗时推荐/批量分析提供任务查询
+- 前端：React + Vite + Ant Design + React Query
 
-- 🔄 **多数据源**：支持 yfinance 和 akshare 数据源
-- 🤖 **多AI模型**：集成 OpenAI、DeepSeek、Gemini
-- 📊 **技术分析**：MA、RSI、MACD 指标分析
-- 💡 **智能推荐**：基于技术分析的股票推荐
-- 🎯 **单股分析**：输入代码获取买卖建议
-- 🌐 **Web界面**：Streamlit 构建的友好界面
+## 快速开始
+1) 安装依赖
+- Python: `pip install -r requirements.txt`
+- 前端: `cd frontend-web && npm i`
 
-## 快速开始 🚀
+2) 配置环境
+- 复制 `.env.example` 为 `.env`，按需填写：
+  - DEFAULT_AI_PROVIDER / OPENAI_* / DEEPSEEK_* / GEMINI_*
+  - STOCK_DATA_SOURCE（默认 akshare）
+  - DATABASE_URL（默认 sqlite:///./a_stock_analysis.db）
+  - HOST / PORT / DEBUG 等
 
-### 1. 安装依赖
+3) 启动后端（Windows PowerShell）
+- `./run_backend.ps1`
+- 或手动：`uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
+- 健康检查：`http://localhost:8000/health`
+- API 文档：`http://localhost:8000/docs`
 
-```bash
-pip install -r requirements.txt
-```
+4) 启动前端（开发模式）
+- `cd frontend-web`
+- `npm run dev` → `http://localhost:5173`
+- 已配置代理：`/api -> http://localhost:8000`
+- 生产预览：`npm run build && npm run preview`（默认 5174）
 
-### 2. 配置环境
+## 主要 API（简要）
+说明：后端将业务路由挂载在 `/api` 前缀下，少量基础路由无前缀（如 `/health`, `/config/ai`）。完整入参/出参请见 Swagger 文档。
 
-复制 `.env.example` 为 `.env` 并填入您的API密钥：
+通用说明：period 默认 `1y`；部分接口支持 AI 配置（provider/temperature/api_key）与权重 `weights`。
 
-```bash
-cp .env.example .env
-```
+- GET `/health`（无前缀）：健康检查
+- GET `/config/ai`（无前缀）：返回默认模型配置
+- POST `/api/ai`：AI 咨询，Body: `{ "prompt": "...", "provider"?, "temperature"?, "api_key"? }`
+- POST `/api/analyze`：多股票分析与推荐（技术+AI 融合）
+  - Body: `{ symbols: string[], period?: string, weights?: object, provider?, temperature?, api_key? }`
+- POST `/api/recommend/market`：全市场候选筛选并推荐（同步）
+  - Body: `{ period?: string, max_candidates?: number, weights?: object, exclude_st?: boolean, min_market_cap?: number, board?: string, provider?, temperature?, api_key? }`
+- 异步任务：
+  - POST `/api/recommend/start` → GET `/api/recommend/status/{task_id}` → GET `/api/recommend/result/{task_id}`
+  - POST `/api/recommend/market/start`（全市场异步）
+  - 关键词选股：POST `/api/recommend/keyword/start`，并配套 `status/result`
+- 自选股（Watchlist）：
+  - POST `/api/watchlist/add`、DELETE `/api/watchlist/remove/{symbol}`、GET `/api/watchlist/list`
+  - 单次批量分析：POST `/api/watchlist/analyze`
+  - 异步批量分析：POST `/api/watchlist/analyze/batch/start` + `status/result`
+  - 历史：GET `/api/watchlist/history/{symbol}`
+- 推荐历史：
+  - GET `/api/recommendations/history`
+  - GET `/api/recommendations/{rec_id}/details`
+  - DELETE `/api/recommendations/{rec_id}`
 
-编辑 `.env` 文件，配置至少一个AI服务商的API密钥。
+## 运行测试
+- 简易联调脚本：`python test_market_api.py`
+  - 可设置环境变量 `BACKEND_URL`（默认 `http://localhost:8000`）。
 
-### 3. 启动服务
+## 环境变量（摘录）
+- 模型：`DEFAULT_AI_PROVIDER`、`OPENAI_*`、`DEEPSEEK_*`、`GEMINI_*`
+- 数据源：`STOCK_DATA_SOURCE=akshare|yfinance`、`UPDATE_INTERVAL`、`CACHE_EXPIRY`
+- 数据库：`DATABASE_URL`（SQLite/MySQL）
+- 应用：`HOST`、`PORT`、`DEBUG`
+- 分析：`DEFAULT_ANALYSIS_PERIOD`、`RISK_FREE_RATE`、`MARKET_BENCHMARK`、`DEFAULT_STOCKS`
 
-**启动后端：**
-```bash
-# Windows
-./run_backend.ps1
+## 技术栈
+- 后端：FastAPI, SQLAlchemy, Pydantic
+- 前端：React 18, Vite 5, Ant Design, @tanstack/react-query
+- 数据&分析：pandas, numpy, akshare, yfinance
+- AI：OpenAI / DeepSeek / Gemini（见 `backend/services/ai_router.py`）
 
-# 或手动启动
-uvicorn backend.main:app --reload --port 8000
-```
-
-**启动前端：**
-```bash
-# Windows  
-./run_frontend.ps1
-
-# 或手动启动
-streamlit run frontend/app.py --server.port 8501
-```
-
-### 4. 访问系统
-
-- 前端界面：http://localhost:8501
-- API文档：http://localhost:8000/docs
-
-## API接口 📡
-
-### 分析股票
-```bash
-POST /api/analyze
-{
-  "symbols": ["AAPL", "MSFT"],
-  "period": "1y"
-}
-```
-
-### 获取推荐
-```bash
-POST /api/recommend  
-{
-  "symbols": ["AAPL", "MSFT", "NVDA"],
-  "period": "1y"
-}
-```
-
-### AI咨询
-```bash
-POST /api/ai
-{
-  "prompt": "分析一下当前市场趋势"
-}
-```
-
-## 配置说明 ⚙️
-
-### AI模型配置
-
-在 `.env` 文件中配置：
-
-```env
-# 选择默认AI提供商
-DEFAULT_AI_PROVIDER=openai
-
-# OpenAI配置
-OPENAI_API_KEY=your_key
-OPENAI_MODEL=gpt-4o-mini
-
-# DeepSeek配置  
-DEEPSEEK_API_KEY=your_key
-DEEPSEEK_MODEL=deepseek-chat
-
-# Gemini配置
-GEMINI_API_KEY=your_key
-GEMINI_MODEL=gemini-pro
-```
-
-### 数据源配置
-
-```env
-# 选择数据源
-STOCK_DATA_SOURCE=yfinance  # yfinance 或 akshare
-UPDATE_INTERVAL=300         # 更新间隔（秒）
-```
-
-## 技术栈 🛠️
-
-- **后端**：FastAPI + Python
-- **前端**：Streamlit
-- **数据**：yfinance / akshare
-- **分析**：pandas + numpy
-- **AI**：OpenAI / DeepSeek / Gemini
-- **可视化**：plotly
-
-## 项目结构 📁
-
+## 项目结构（简要）
 ```
 gupiao/
-├── backend/
-│   ├── main.py              # FastAPI主应用
-│   ├── routes.py            # API路由
-│   └── services/
-│       ├── ai_router.py     # AI模型路由
-│       ├── data_fetcher.py  # 数据抓取
-│       └── analyzer.py      # 技术分析
-├── frontend/
-│   └── app.py              # Streamlit前端
-├── requirements.txt        # Python依赖
-├── .env.example           # 环境配置示例
-└── README.md              # 说明文档
+├── backend/              # FastAPI 后端与业务逻辑
+│   ├── main.py           # 应用入口（/health, /config/ai 等）
+│   ├── routes.py         # 业务 API（挂载到 /api）
+│   ├── routes_recommends.py # 推荐历史查询/删除
+│   └── services/         # 数据抓取、分析与AI集成
+└── frontend-web/         # React + Vite 前端
 ```
 
-## 开发指南 👨‍💻
-
-### 添加新的技术指标
-
-在 `backend/services/analyzer.py` 中添加新的分析函数：
-
-```python
-def your_indicator(series: pd.Series) -> pd.Series:
-    # 实现您的指标逻辑
-    return result
-```
-
-### 集成新的AI提供商
-
-在 `backend/services/ai_router.py` 中添加新的完成方法：
-
-```python
-def _your_provider_complete(self, prompt: str, model: str) -> str:
-    # 实现API调用逻辑
-    return response
-```
-
-## 许可证 📄
-
-MIT License
+提示：完整接口与字段约束以 `http://localhost:8000/docs` 为准。
