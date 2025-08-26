@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import atexit
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +21,31 @@ app.add_middleware(
 # 集成模块路由
 from .routes import router as api_router
 from .routes_recommends import rec_router as rec_history_router
+from .services.performance_scheduler import performance_scheduler
+
 app.include_router(api_router, prefix="/api")
 app.include_router(rec_history_router, prefix="/api")
+
+# 启动性能调度器
+@app.on_event("startup")
+async def startup_event():
+    """App启动时的初始化"""
+    # 启动性能缓存定时任务
+    performance_scheduler.start()
+    print("[系统] 性能缓存调度器已启动")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """App关闭时的清理工作"""
+    # 停止性能缓存定时任务
+    performance_scheduler.stop()
+    print("[系统] 性能缓存调度器已停止")
+
+# 注册程序退出时的清理函数
+def cleanup():
+    performance_scheduler.stop()
+
+atexit.register(cleanup)
 
 class StockQuery(BaseModel):
     symbol: str

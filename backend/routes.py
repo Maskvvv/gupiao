@@ -92,9 +92,22 @@ class AnalysisRecord(Base):
     ai_advice = Column(Text)
     # 新增：AI信心与融合分（0-10），保留原始解析文本
     ai_confidence = Column(Float)  # 可空，AI未返回则为None
-    ai_confidence_raw = Column(String(255))  # AI文本中解析出的原始“信心”片段
+    ai_confidence_raw = Column(String(255))  # AI文本中解析出的原始"信心"片段
     fusion_score = Column(Float)  # 可空；无AI信心时可等于技术分
     created_at = Column(DateTime, default=now_bj, index=True)
+
+# 股票性能缓存表
+class PerformanceCache(Base):
+    __tablename__ = "performance_cache"
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(16), index=True, nullable=False)
+    watchlist_added_date = Column(DateTime, nullable=False)  # 加入自选股的日期
+    base_price = Column(Float, nullable=False)  # 基准价格（加入日的收盘价）
+    current_price = Column(Float, nullable=False)  # 当前价格
+    cumulative_return_pct = Column(Float, nullable=False)  # 累计涨跌幅(%)
+    cumulative_return_amount = Column(Float, nullable=False)  # 累计涨跌额
+    last_updated = Column(DateTime, default=now_bj, index=True)  # 最后更新时间
+    created_at = Column(DateTime, default=now_bj)
 
 # 确保表存在（幂等）
 Base.metadata.create_all(engine)
@@ -135,6 +148,8 @@ try:
             if "fusion_score" not in ar_cols:
                 conn.execute(text("ALTER TABLE analysis_records ADD COLUMN fusion_score REAL"))
                 print("[migrate] sqlite: added analysis_records.fusion_score")
+
+            # performance_cache 表：检查是否存在，不存在则由 Base.metadata.create_all 创建
 
     elif engine.url.get_backend_name().startswith("mysql"):
         # MySQL 迁移：检查列是否存在，不存在则添加
@@ -753,9 +768,18 @@ def watchlist_add(req: WatchlistAddRequest):
         exists = db.query(Watchlist).filter(Watchlist.symbol == symbol).first()
         if exists:
             return {"ok": True, "symbol": symbol, "name": exists.name}
-        item = Watchlist(symbol=symbol, name=name)
+        item = Watchlist(symbol=symbol, name=name, created_at=now_bj())
         db.add(item)
         db.commit()
+        
+        # 初始化性能缓存
+        from .services.performance_cache import performance_cache_service
+        try:
+            performance_cache_service.get_or_calculate_performance(symbol, item.created_at)
+        except Exception as e:
+            # 性能缓存初始化失败不影响主流程
+            print(f"[警告] 初始化性能缓存失败: {symbol} - {str(e)}")
+        
         return {"ok": True, "symbol": symbol, "name": name}
 
 @router.delete("/watchlist/remove/{symbol}")
@@ -774,48 +798,35 @@ def watchlist_list():
     results = []
     with SessionLocal() as db:
         wl = db.query(Watchlist).order_by(Watchlist.created_at.desc()).all()
-        fetcher = DataFetcher()
-        now = now_bj()
-        # 将天数映射到可用period，避免修改DataFetcher签名
-        days_to_period = lambda d: (
-            "1d" if d <= 1 else
-            "5d" if d <= 5 else
-            "1mo" if d <= 30 else
-            "3mo" if d <= 90 else
-            "6mo" if d <= 180 else
-            "1y" if d <= 365 else
-            "2y" if d <= 730 else
-            "5y"
-        )
+        
+        # 使用性能缓存服务获取累计涨跌幅
+        from .services.performance_cache import performance_cache_service
+        
         for it in wl:
-            # 兜底：计算区间
-            created_at = it.created_at or now
-            days = max(1, (now - created_at).days)
-            period = days_to_period(days)
-            # 计算累计收益（可能因数据缺失而为空）
+            # 获取或计算累计涨跌幅（使用缓存）
+            performance_data = performance_cache_service.get_or_calculate_performance(
+                it.symbol, 
+                it.created_at or now_bj()
+            )
+            
+            # 解析累计涨跌幅数据
             cum_pct = None
             cum_amt = None
             start_price = None
             last_price = None
-            try:
-                df = fetcher.get_stock_data(it.symbol, period=period)
-                if df is not None and not df.empty:
-                    # Eastmoney列名在DataFetcher中统一为了标题大小写，Close为收盘价
-                    df_sorted = df.sort_index()
-                    # 找到加入日(含)之后的第一根K线；若没有则使用最早一根
-                    target_idx = df_sorted.index[df_sorted.index >= created_at]
-                    first_idx = target_idx[0] if len(target_idx) > 0 else df_sorted.index[0]
-                    start_price = float(df_sorted.loc[first_idx, 'Close']) if 'Close' in df_sorted.columns else None
-                    last_price = float(df_sorted['Close'].iloc[-1]) if 'Close' in df_sorted.columns else None
-                    if start_price and last_price and start_price > 0:
-                        cum_pct = round((last_price / start_price - 1.0) * 100.0, 2)
-                        cum_amt = round(last_price - start_price, 3)
-            except Exception:
-                # 忽略个别股票计算异常，不影响整体
-                pass
+            
+            if performance_data:
+                cum_pct = performance_data['cumulative_return_pct']
+                cum_amt = performance_data['cumulative_return_amount']
+                start_price = performance_data['base_price']
+                last_price = performance_data['current_price']
 
             # 最近一次分析记录
             last = db.query(AnalysisRecord).filter(AnalysisRecord.symbol == it.symbol).order_by(AnalysisRecord.created_at.desc()).first()
+            
+            # 格式化加入日期
+            created_at = it.created_at or now_bj()
+            
             results.append({
                 "股票代码": it.symbol,
                 "股票名称": it.name,
@@ -985,3 +996,38 @@ def watchlist_history(symbol: str, page: int = 1, page_size: int = 20):
         "page_size": page_size,
         "items": items,
     }
+
+# =================== 性能缓存管理接口 START ===================
+
+@router.get("/performance/cache/status")
+def get_performance_cache_status():
+    """获取性能缓存状态"""
+    from .services.performance_scheduler import performance_scheduler
+    return performance_scheduler.get_status()
+
+@router.post("/performance/cache/update")
+def trigger_performance_cache_update(symbols: Optional[List[str]] = None):
+    """手动触发性能缓存更新"""
+    from .services.performance_scheduler import performance_scheduler
+    return performance_scheduler.trigger_manual_update(symbols)
+
+class PerformanceCacheUpdateRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+
+@router.post("/performance/cache/update_batch")
+def trigger_performance_cache_update_batch(req: PerformanceCacheUpdateRequest):
+    """手动触发性能缓存更新（使用请求体）"""
+    from .services.performance_scheduler import performance_scheduler
+    return performance_scheduler.trigger_manual_update(req.symbols)
+
+@router.post("/performance/cache/cleanup")
+def cleanup_performance_cache():
+    """清理过期性能缓存"""
+    from .services.performance_cache import performance_cache_service
+    try:
+        cleaned_count = performance_cache_service.clean_expired_cache()
+        return {"success": True, "cleaned_count": cleaned_count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# =================== 性能缓存管理接口 END ===================
