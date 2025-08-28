@@ -27,31 +27,7 @@ export async function recommend(config: RecommendConfig = {}) {
   return r.data
 }
 
-export type HistoryRecord = {
-  id: number
-  created_at: string
-  period: string
-  total_candidates: number
-  top_n: number
-  summary: string
-  recommend_type?: string
-  status?: string
-}
 
-export async function getRecommendHistory(page = 1, page_size = 10, start_date?: string, end_date?: string, recommend_type?: string) {
-  const r = await http.get('/api/recommendations/history', { params: { page, page_size, start_date, end_date, recommend_type } })
-  return r.data as { total: number; page: number; page_size: number; records: HistoryRecord[] }
-}
-
-export async function getRecommendDetails(rec_id: number) {
-  const r = await http.get(`/api/recommendations/${rec_id}/details`)
-  return r.data as { id: number; created_at: string; period: string; total_candidates: number; items: RecommendItem[] }
-}
-
-export async function deleteRecommend(rec_id: number) {
-  const r = await http.delete(`/api/recommendations/${rec_id}`)
-  return r.data
-}
 
 // 关键词推荐：请求与结果类型
 export type KeywordStartPayload = {
