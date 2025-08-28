@@ -47,7 +47,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, open, onClose, d
     queryKey: ['task-detail', taskId],
     queryFn: () => taskApi.getTaskStatus(taskId),
     enabled: open,
-    refetchInterval: (data) => data?.status === 'running' ? 2000 : false
+    refetchInterval: (query) => query.state.data?.status === 'running' ? 2000 : false
   });
 
   const { data: results } = useQuery<TaskResult[]>({
@@ -82,7 +82,9 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, open, onClose, d
     const typeMap = {
       'ai': 'AI推荐',
       'keyword': '关键词推荐', 
-      'market': '全市场推荐'
+      'market': '全市场推荐',
+      'watchlist_batch': '批量分析',
+      'watchlist_reanalyze': '单股分析'
     };
     return typeMap[type as keyof typeof typeMap] || type;
   };
@@ -319,7 +321,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, open, onClose, d
                       key: 'selected_by',
                       width: 100,
                       render: (text: string) => (
-                        <Tag color={text === 'AI推荐' ? 'blue' : 'green'} size="small">
+                        <Tag color={text === 'AI推荐' ? 'blue' : 'green'}>
                           {text}
                         </Tag>
                       )
@@ -476,7 +478,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, open, onClose, d
                 rows: 3, 
                 expandable: true, 
                 symbol: '查看更多',
-                onExpand: (_, info) => {
+                onExpand: (_: any, info: any) => {
                   if (info.expanded) {
                     // 记录用户展开详情的行为
                     console.log(`用户查看了 ${record.symbol} 的详细分析`);
@@ -499,7 +501,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, open, onClose, d
         key: 'actions',
         width: 120,
         fixed: 'right' as const,
-        render: (_, record: TaskResult) => (
+        render: (_: any, record: TaskResult) => (
           <Space size="small">
             <Button 
               type="primary"

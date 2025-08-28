@@ -15,9 +15,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # 新增：持久化相关
 import json
-# 补充：异步任务与任务ID依赖
 import threading
 import uuid
+# 异步任务功能已迁移到任务管理中心
 
 router = APIRouter()
 
@@ -822,8 +822,15 @@ def watchlist_list():
                 start_price = performance_data['base_price']
                 last_price = performance_data['current_price']
 
-            # 最近一次分析记录
+            # 最近一次分析记录（从AnalysisRecord获取基本信息）
             last = db.query(AnalysisRecord).filter(AnalysisRecord.symbol == it.symbol).order_by(AnalysisRecord.created_at.desc()).first()
+            
+            # 最近一次任务结果（从RecommendationResult获取技术分等详细信息）
+            try:
+                from backend.models.streaming_models import RecommendationResult
+                latest_result = db.query(RecommendationResult).filter(RecommendationResult.symbol == it.symbol).order_by(RecommendationResult.analyzed_at.desc()).first()
+            except ImportError:
+                latest_result = None
             
             # 格式化加入日期
             created_at = it.created_at or now_bj()
@@ -832,6 +839,7 @@ def watchlist_list():
                 "股票代码": it.symbol,
                 "股票名称": it.name,
                 "综合评分": round(float(last.score), 2) if last and last.score is not None else None,
+                "技术分": round(float(latest_result.technical_score), 2) if latest_result and latest_result.technical_score is not None else None,
                 "操作建议": last.action if last else None,
                 "分析理由摘要": (last.reason_brief or "").split("。")[0] + "。" if last and last.reason_brief else None,
                 "最近分析时间": last.created_at.strftime("%Y-%m-%d %H:%M:%S") if last else None,
@@ -851,119 +859,59 @@ def watchlist_list():
     return {"items": results}
 
 @router.post("/watchlist/analyze")
-def watchlist_analyze(req: WatchlistBatchAnalyzeRequest):
+async def watchlist_analyze(req: WatchlistBatchAnalyzeRequest):
+    """单股分析接口 - 使用任务管理中心"""
     # 单股分析：当symbols为单只或未传时，要求用户传一只
     symbols = (req.symbols or [])
     if len(symbols) != 1:
         return {"error": "请仅传入一只股票进行单股分析"}
+    
     symbol = symbols[0]
-    fetcher = DataFetcher()
-    df = fetcher.get_stock_data(symbol, period=req.period)
-    if df is None:
-        return {"error": f"无法获取{symbol}历史数据"}
-    df_compatible = df.reset_index()
-    df_compatible.columns = [c.lower() for c in df_compatible.columns]
-    analyzer = EnhancedAnalyzer()
-    ai_params = {"provider": req.provider, "temperature": req.temperature, "api_key": req.api_key}
-    analysis = analyzer.analyze_with_ai(symbol, df_compatible, weights=req.weights, ai_params=ai_params)
-    # 持久化分析记录
-    if analysis.get("valid", True):
-        reason = ((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason")
-        with SessionLocal() as db:
-            db.add(AnalysisRecord(
-                symbol=symbol,
-                score=float(analysis.get("score", 0.0)) if analysis.get("score") is not None else None,
-                action=analysis.get("action"),
-                reason_brief=reason,
-                ai_advice=analysis.get("ai_advice"),
-                ai_confidence=analysis.get("ai_confidence"),
-                ai_confidence_raw=analysis.get("ai_confidence_raw"),
-                fusion_score=analysis.get("fusion_score"),
-            ))
-            db.commit()
-    return {"symbol": symbol, "analysis": analysis}
+    
+    try:
+        # 导入任务管理器
+        from backend.services.task_manager import task_manager
+        
+        # 构建AI配置
+        ai_config = {}
+        if req.provider:
+            ai_config["provider"] = req.provider
+        if req.temperature is not None:
+            ai_config["temperature"] = req.temperature
+        if req.api_key:
+            ai_config["api_key"] = req.api_key
+        
+        # 创建并启动自选股重新分析任务
+        task_id = await task_manager.create_watchlist_reanalyze_task(
+            symbol=symbol,
+            period=req.period,
+            weights=req.weights,
+            ai_config=ai_config if ai_config else None,
+            priority=1  # 单股分析优先级较高
+        )
+        
+        # 立即启动任务
+        success = await task_manager.start_task(task_id)
+        if not success:
+            return {"error": "任务创建成功但启动失败"}
+        
+        # 返回任务信息
+        return {
+            "task_id": task_id,
+            "symbol": symbol,
+            "status": "running",
+            "message": f"自选股票 {symbol} 重新分析任务已创建并启动",
+            "stream_url": f"/api/v2/stream/{task_id}"
+        }
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"❌ 创建单股分析任务失败: {e}")
+        return {"error": f"创建分析任务失败: {str(e)}"}
 
-@router.post("/watchlist/analyze/batch/start")
-def watchlist_analyze_batch_start(req: WatchlistBatchAnalyzeRequest):
-    task_id = str(uuid.uuid4())
-    PROGRESS_STORE[task_id] = {"status": "running", "done": 0, "total": 0, "percent": 0}
-
-    def worker(req_obj, task):
-        try:
-            fetcher = DataFetcher()
-            analyzer = EnhancedAnalyzer()
-            ai_params = {"provider": req_obj.provider, "temperature": req_obj.temperature, "api_key": req_obj.api_key}
-            with SessionLocal() as db:
-                if req_obj.symbols:
-                    syms = [s.strip() for s in req_obj.symbols if s and s.strip()]
-                else:
-                    syms = [w.symbol for w in db.query(Watchlist).all()]
-            total = len(syms)
-            PROGRESS_STORE[task].update({"total": total})
-            results = []
-            done = 0
-            for s in syms:
-                df = fetcher.get_stock_data(s, period=req_obj.period)
-                if df is None:
-                    results.append({"股票代码": s, "错误": "无法获取数据"})
-                    done += 1
-                    PROGRESS_STORE[task].update({"done": done, "percent": int(done*100/max(total,1))})
-                    continue
-                df_compatible = df.reset_index()
-                df_compatible.columns = [c.lower() for c in df_compatible.columns]
-                analysis = analyzer.analyze_with_ai(s, df_compatible, weights=req_obj.weights, ai_params=ai_params)
-                # 持久化
-                if analysis.get("valid", True):
-                    reason = ((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason")
-                    with SessionLocal() as db:
-                        db.add(AnalysisRecord(
-                            symbol=s,
-                            score=float(analysis.get("score", 0.0)) if analysis.get("score") is not None else None,
-                            action=analysis.get("action"),
-                            reason_brief=reason,
-                            ai_advice=analysis.get("ai_advice")
-                        ))
-                        db.commit()
-                # 输出结构（中文字段）
-                fetcher_local = DataFetcher()
-                info = fetcher_local.get_stock_info(s)
-                stock_name = (info.get('股票简称') if info else None) or f"股票{s}"
-                results.append({
-                    "股票代码": s,
-                    "股票名称": stock_name,
-                    "评分": round(float(analysis.get("score", 0.0)), 2) if analysis.get("score") is not None else None,
-                    "建议动作": analysis.get("action"),
-                    "理由简述": (((analysis.get("ai_advice") or "").split("\n")[0]) or analysis.get("action_reason") or "").strip(),
-                    # 可选：批量结果里也带上AI详细文本
-                    "AI详细分析": analysis.get("ai_advice"),
-                })
-                done += 1
-                PROGRESS_STORE[task].update({"done": done, "percent": int(done*100/max(total,1))})
-            PROGRESS_STORE[task].update({"status": "done", "result": {"items": results}})
-        except Exception as e:
-            PROGRESS_STORE[task].update({"status": "error", "error": str(e)})
-
-    threading.Thread(target=worker, args=(req, task_id), daemon=True).start()
-    return {"task_id": task_id}
-
-@router.get("/watchlist/analyze/batch/status/{task_id}")
-def watchlist_analyze_batch_status(task_id: str):
-    info = PROGRESS_STORE.get(task_id, {})
-    if not info:
-        return {"status": "not_found"}
-    return {"status": info.get("status"), "done": info.get("done", 0), "total": info.get("total", 0), "percent": info.get("percent", 0)}
-
-@router.get("/watchlist/analyze/batch/result/{task_id}")
-def watchlist_analyze_batch_result(task_id: str):
-    info = PROGRESS_STORE.get(task_id, {})
-    if not info:
-        return {"status": "not_found"}
-    if info.get("status") == "done":
-        return info.get("result", {})
-    elif info.get("status") == "error":
-        return {"error": info.get("error")}
-    else:
-        return {"status": info.get("status")}
+# 旧的批量分析接口已迁移到任务管理中心 (routes_streaming.py)
+# 以下接口已被 /api/v2/stream/watchlist/batch/* 替代
 # =================== 自选股票功能 END ===================
 
 # 新增：个股分析历史查询
@@ -981,9 +929,21 @@ def watchlist_history(symbol: str, page: int = 1, page_size: int = 20):
         recs = q.offset((page - 1) * page_size).limit(page_size).all()
         items = []
         for r in recs:
+            # 查找对应时间的任务结果获取技术分
+            try:
+                from backend.models.streaming_models import RecommendationResult
+                result_for_time = db.query(RecommendationResult).filter(
+                    RecommendationResult.symbol == symbol,
+                    RecommendationResult.analyzed_at >= r.created_at - timedelta(minutes=5),
+                    RecommendationResult.analyzed_at <= r.created_at + timedelta(minutes=5)
+                ).first()
+            except ImportError:
+                result_for_time = None
+            
             items.append({
                 "时间": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
                 "综合评分": round(float(r.score), 2) if r.score is not None else None,
+                "技术分": round(float(result_for_time.technical_score), 2) if result_for_time and result_for_time.technical_score is not None else None,
                 "AI信心": round(float(r.ai_confidence), 2) if r.ai_confidence is not None else None,
                 "融合分": round(float(r.fusion_score), 2) if r.fusion_score is not None else None,
                 "操作建议": r.action,

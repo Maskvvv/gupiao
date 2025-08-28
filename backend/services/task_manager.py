@@ -224,6 +224,118 @@ class TaskManager:
         logger.info(f"✅ 创建全市场推荐任务: {task_id}, 最大候选数: {max_candidates}")
         return task_id
     
+    async def create_watchlist_reanalyze_task(self, symbol: str,
+                                            period: str = "1y",
+                                            weights: Optional[Dict[str, float]] = None,
+                                            ai_config: Optional[Dict[str, Any]] = None,
+                                            priority: int = 5) -> str:
+        """创建自选股重新分析任务"""
+        task_id = str(uuid.uuid4()).replace('-', '')
+        
+        request_params = {
+            'symbol': symbol,
+            'period': period
+        }
+        
+        weights_config = weights or {
+            "technical": 0.4,
+            "macro_sentiment": 0.35,
+            "news_events": 0.25
+        }
+        
+        ai_config = ai_config or {}
+        
+        # 创建任务记录
+        with SessionLocal() as db:
+            # 生成用户详情摘要
+            user_input_summary = f"重新分析股票: {symbol} | 分析周期: {period}"
+            
+            weights_str = ', '.join([f'{k}({v})' for k, v in weights_config.items()])
+            filter_summary = f'权重配置: {weights_str}'
+            
+            execution_strategy = "单股重新分析 → 技术分析 → AI深度分析 → 融合评分 → 输出结果"
+            
+            task = RecommendationTask(
+                id=task_id,
+                task_type='watchlist_reanalyze',
+                status='pending',
+                priority=priority,
+                request_params=json.dumps(request_params),
+                ai_config=json.dumps(ai_config),
+                weights_config=json.dumps(weights_config),
+                total_symbols=1,
+                # 用户详情字段
+                user_input_summary=user_input_summary,
+                filter_summary=filter_summary,
+                execution_strategy=execution_strategy
+            )
+            db.add(task)
+            db.commit()
+        
+        logger.info(f"✅ 创建自选股重新分析任务: {task_id}, 股票: {symbol}")
+        return task_id
+    
+    async def create_watchlist_batch_task(self, symbols: Optional[List[str]] = None,
+                                        period: str = "1y",
+                                        weights: Optional[Dict[str, float]] = None,
+                                        ai_config: Optional[Dict[str, Any]] = None,
+                                        priority: int = 5) -> str:
+        """创建自选股批量分析任务"""
+        task_id = str(uuid.uuid4()).replace('-', '')
+        
+        request_params = {
+            'symbols': symbols,
+            'period': period
+        }
+        
+        weights_config = weights or {
+            "technical": 0.4,
+            "macro_sentiment": 0.35,
+            "news_events": 0.25
+        }
+        
+        ai_config = ai_config or {}
+        
+        # 创建任务记录
+        with SessionLocal() as db:
+            # 生成用户详情摘要
+            if symbols:
+                symbol_count = len(symbols)
+                if symbol_count <= 5:
+                    symbol_list = ', '.join(symbols)
+                    user_input_summary = f"自选股批量分析 | 指定股票 ({symbol_count}只): {symbol_list}"
+                else:
+                    symbol_preview = ', '.join(symbols[:5])
+                    user_input_summary = f"自选股批量分析 | 指定股票 ({symbol_count}只): {symbol_preview}..."
+            else:
+                user_input_summary = f"自选股批量分析 | 全部自选股 | 分析周期: {period}"
+            
+            weights_str = ', '.join([f'{k}({v})' for k, v in weights_config.items()])
+            filter_summary = f'自选股票池 | 权重配置: {weights_str}'
+            
+            execution_strategy = "获取自选股列表 → 技术分析 → AI深度分析 → 融合评分 → 更新分析记录"
+            
+            task = RecommendationTask(
+                id=task_id,
+                task_type='watchlist_batch',
+                status='pending',
+                priority=priority,
+                request_params=json.dumps(request_params),
+                ai_config=json.dumps(ai_config),
+                weights_config=json.dumps(weights_config),
+                total_symbols=len(symbols) if symbols else 0,  # 如果未指定symbols，会在执行时更新
+                # 用户详情字段
+                user_input_summary=user_input_summary,
+                filter_summary=filter_summary,
+                execution_strategy=execution_strategy
+            )
+            db.add(task)
+            db.commit()
+        
+        symbol_info = f"{len(symbols)}只指定股票" if symbols else "全部自选股"
+        logger.info(f"✅ 创建自选股批量分析任务: {task_id}, {symbol_info}")
+        return task_id
+    
     async def start_task(self, task_id: str) -> bool:
         """启动任务执行"""
         with self.task_lock:

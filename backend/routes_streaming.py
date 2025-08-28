@@ -5,7 +5,7 @@
 import uuid
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 import logging
 import uuid
@@ -47,6 +47,22 @@ class MarketRecommendationRequest(BaseModel):
     filter_config: Optional[Dict[str, Any]] = None
     ai_config: Optional[Dict[str, Any]] = None
     priority: int = 5
+
+class WatchlistBatchRequest(BaseModel):
+    """自选股票批量分析请求"""
+    symbols: Optional[List[str]] = Field(default=None, description="股票代码列表，为空时分析所有自选股")
+    period: str = Field(default="1y", description="分析周期")
+    weights: Optional[Dict[str, float]] = Field(default=None, description="权重配置")
+    ai_config: Optional[Dict[str, Any]] = Field(default=None, description="AI配置")
+    priority: int = Field(default=5, description="任务优先级")
+
+class WatchlistReanalyzeRequest(BaseModel):
+    """自选股票单股重新分析请求"""
+    symbol: str = Field(..., description="股票代码")
+    period: str = Field(default="1y", description="分析周期")
+    weights: Optional[Dict[str, float]] = Field(default=None, description="权重配置")
+    ai_config: Optional[Dict[str, Any]] = Field(default=None, description="AI配置")
+    priority: int = Field(default=5, description="任务优先级")
 
 class TaskResponse(BaseModel):
     """任务响应模型"""
@@ -351,6 +367,130 @@ async def create_and_start_keyword_recommendation(request: KeywordRecommendation
         raise
     except Exception as e:
         logger.error(f"❌ 创建并启动关键词推荐任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建并启动任务失败: {str(e)}")
+
+# ===== 自选股票任务端点 =====
+
+@streaming_router.post("/watchlist/batch", response_model=TaskResponse)
+async def create_watchlist_batch_task(request: WatchlistBatchRequest):
+    """创建自选股票批量分析任务"""
+    try:
+        # 创建任务
+        task_id = await task_manager.create_watchlist_batch_task(
+            symbols=request.symbols,
+            period=request.period,
+            weights=request.weights,
+            ai_config=request.ai_config,
+            priority=request.priority
+        )
+        
+        stream_url = f"/api/v2/stream/{task_id}"
+        
+        symbol_count = len(request.symbols) if request.symbols else "所有自选股"
+        
+        return TaskResponse(
+            task_id=task_id,
+            stream_url=stream_url,
+            status="pending",
+            message=f"自选股票批量分析任务已创建，将分析 {symbol_count} 只股票"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ 创建自选股票批量分析任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
+
+@streaming_router.post("/watchlist/batch/start", response_model=TaskResponse)
+async def create_and_start_watchlist_batch_task(request: WatchlistBatchRequest):
+    """创建并立即启动自选股票批量分析任务"""
+    try:
+        # 创建任务
+        task_id = await task_manager.create_watchlist_batch_task(
+            symbols=request.symbols,
+            period=request.period,
+            weights=request.weights,
+            ai_config=request.ai_config,
+            priority=request.priority
+        )
+        
+        # 立即启动任务
+        success = await task_manager.start_task(task_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="任务创建成功但启动失败")
+        
+        stream_url = f"/api/v2/stream/{task_id}"
+        
+        symbol_count = len(request.symbols) if request.symbols else "所有自选股"
+        
+        return TaskResponse(
+            task_id=task_id,
+            stream_url=stream_url,
+            status="running",
+            message=f"自选股票批量分析任务已创建并启动，正在分析 {symbol_count} 只股票"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 创建并启动自选股票批量分析任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建并启动任务失败: {str(e)}")
+
+@streaming_router.post("/watchlist/reanalyze", response_model=TaskResponse)
+async def create_watchlist_reanalyze_task(request: WatchlistReanalyzeRequest):
+    """创建自选股票单股重新分析任务"""
+    try:
+        # 创建任务
+        task_id = await task_manager.create_watchlist_reanalyze_task(
+            symbol=request.symbol,
+            period=request.period,
+            weights=request.weights,
+            ai_config=request.ai_config,
+            priority=request.priority
+        )
+        
+        stream_url = f"/api/v2/stream/{task_id}"
+        
+        return TaskResponse(
+            task_id=task_id,
+            stream_url=stream_url,
+            status="pending",
+            message=f"自选股票重新分析任务已创建，股票代码: {request.symbol}"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ 创建自选股票重新分析任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
+
+@streaming_router.post("/watchlist/reanalyze/start", response_model=TaskResponse)
+async def create_and_start_watchlist_reanalyze_task(request: WatchlistReanalyzeRequest):
+    """创建并立即启动自选股票单股重新分析任务"""
+    try:
+        # 创建任务
+        task_id = await task_manager.create_watchlist_reanalyze_task(
+            symbol=request.symbol,
+            period=request.period,
+            weights=request.weights,
+            ai_config=request.ai_config,
+            priority=request.priority
+        )
+        
+        # 立即启动任务
+        success = await task_manager.start_task(task_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="任务创建成功但启动失败")
+        
+        stream_url = f"/api/v2/stream/{task_id}"
+        
+        return TaskResponse(
+            task_id=task_id,
+            stream_url=stream_url,
+            status="running",
+            message=f"自选股票重新分析任务已创建并启动，股票代码: {request.symbol}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 创建并启动自选股票重新分析任务失败: {e}")
         raise HTTPException(status_code=500, detail=f"创建并启动任务失败: {str(e)}")
 
 # ===== 系统状态端点 =====

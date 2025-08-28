@@ -90,6 +90,10 @@ class StreamingRecommendationEngine:
                 await self._process_keyword_recommendation(task, analysis_logger)
             elif task.task_type == 'market':
                 await self._process_market_recommendation(task, analysis_logger)
+            elif task.task_type == 'watchlist_batch':
+                await self._process_watchlist_batch(task, analysis_logger)
+            elif task.task_type == 'watchlist_reanalyze':
+                await self._process_watchlist_reanalyze(task, analysis_logger)
             else:
                 analysis_logger.log_error('unknown_task_type', f'Unknown task type: {task.task_type}')
                 raise ValueError(f"Unknown task type: {task.task_type}")
@@ -660,7 +664,7 @@ class StreamingRecommendationEngine:
             result = {
                 'symbol': symbol,
                 'name': stock_name,
-                'technical_score': tech_score * 10.0,  # 技术分映射到0-10范围以保持一致性
+                'technical_score': tech_score * 10,  # 转换为0-10范围用于持久化
                 'ai_score': ai_scores.get('confidence', 0),
                 'fusion_score': fusion_score,
                 'final_score': fusion_score,
@@ -776,3 +780,246 @@ class StreamingRecommendationEngine:
             except Exception as e:
                 db.rollback()
                 logger.error(f"❌ 存储候选股票信息失败: {e}")
+    
+    async def _process_watchlist_batch(self, task: RecommendationTask, analysis_logger: AnalysisLogger):
+        """处理自选股票批量分析任务"""
+        request_params = json.loads(task.request_params)
+        symbols = request_params.get('symbols')
+        
+        # 如果没有指定股票列表，获取所有自选股
+        if not symbols:
+            symbols = await self._get_all_watchlist_symbols()
+            if not symbols:
+                error_msg = "自选股列表为空，无法执行批量分析"
+                logger.error(f"❌ {error_msg}")
+                analysis_logger.log_error('empty_watchlist', error_msg)
+                raise ValueError(error_msg)
+        
+        await self._update_task_total_symbols(task.id, len(symbols))
+        logger.info(f"🎯 开始自选股票批量分析任务: {len(symbols)} 只股票")
+        
+        # 记录任务详情
+        await self._update_watchlist_task_details(task, symbols, 'batch')
+        
+        results = []
+        for i, symbol in enumerate(symbols):
+            # 更新当前处理状态
+            await self.progress_manager.update_current_symbol(task.id, symbol)
+            await self._update_task_current_symbol(task.id, symbol)
+            
+            # 获取股票数据
+            stock_data = self.data_fetcher.get_stock_data(
+                symbol, 
+                period=request_params.get('period', '1y')
+            )
+            
+            if stock_data is None or stock_data.empty:
+                await self.progress_manager.record_symbol_failed(task.id, symbol, "数据获取失败")
+                await self._increment_failed_count(task.id)
+                continue
+            
+            # 流式分析股票
+            analysis_result = await self._stream_analyze_symbol(
+                task.id, symbol, stock_data, 
+                ai_config=json.loads(task.ai_config or '{}'),
+                weights=json.loads(task.weights_config or '{}'),
+                analysis_logger=analysis_logger
+            )
+            
+            if analysis_result:
+                results.append(analysis_result)
+                await self.progress_manager.record_symbol_completed(task.id, symbol)
+                await self._increment_successful_count(task.id)
+                
+                # 保存分析结果到自选股分析记录
+                await self._save_watchlist_analysis_result(symbol, analysis_result)
+            
+            # 更新进度
+            progress = (i + 1) / len(symbols) * 100
+            await self.progress_manager.update_progress(task.id, progress)
+            await self._update_task_progress(task.id, progress, i + 1)
+        
+        # 排序和生成最终推荐
+        final_recommendations = await self._rank_and_select_recommendations(task.id, results)
+        await self._save_task_results(task.id, final_recommendations)
+        
+        logger.info(f"✨ 自选股票批量分析完成: {len(final_recommendations)} 只股票")
+        
+        return final_recommendations
+    
+    async def _process_watchlist_reanalyze(self, task: RecommendationTask, analysis_logger: AnalysisLogger):
+        """处理自选股票单股重新分析任务"""
+        logger.info(f"🔍 开始处理自选股重新分析任务: {task.id}")
+        request_params = json.loads(task.request_params)
+        symbol = request_params.get('symbol')
+        logger.info(f"📊 解析请求参数 - 股票代码: {symbol}, 周期: {request_params.get('period', '1y')}")
+        
+        if not symbol:
+            error_msg = "股票代码不能为空"
+            logger.error(f"❌ {error_msg}")
+            analysis_logger.log_error('missing_symbol', error_msg)
+            raise ValueError(error_msg)
+        
+        # 验证股票是否在自选股列表中
+        logger.info(f"🔍 验证股票 {symbol} 是否在自选股列表中...")
+        watchlist_symbols = await self._get_all_watchlist_symbols()
+        logger.info(f"📋 自选股列表: {watchlist_symbols}")
+        
+        if symbol not in watchlist_symbols:
+            error_msg = f"股票 {symbol} 不在自选股列表中，当前自选股: {watchlist_symbols}"
+            logger.error(f"❌ {error_msg}")
+            analysis_logger.log_error('symbol_not_in_watchlist', error_msg)
+            raise ValueError(error_msg)
+        
+        logger.info(f"✅ 股票 {symbol} 验证通过，开始分析...")
+        
+        await self._update_task_total_symbols(task.id, 1)
+        logger.info(f"🎯 开始自选股票重新分析任务: {symbol}")
+        
+        # 记录任务详情
+        await self._update_watchlist_task_details(task, [symbol], 'reanalyze')
+        
+        # 更新当前处理状态
+        await self.progress_manager.update_current_symbol(task.id, symbol)
+        await self._update_task_current_symbol(task.id, symbol)
+        
+        # 获取股票数据
+        stock_data = self.data_fetcher.get_stock_data(
+            symbol, 
+            period=request_params.get('period', '1y')
+        )
+        
+        if stock_data is None or stock_data.empty:
+            error_msg = f"股票 {symbol} 数据获取失败"
+            await self.progress_manager.record_symbol_failed(task.id, symbol, error_msg)
+            await self._increment_failed_count(task.id)
+            analysis_logger.log_error('data_fetch_failed', error_msg)
+            raise ValueError(error_msg)
+        
+        # 流式分析股票
+        analysis_result = await self._stream_analyze_symbol(
+            task.id, symbol, stock_data, 
+            ai_config=json.loads(task.ai_config or '{}'),
+            weights=json.loads(task.weights_config or '{}'),
+            analysis_logger=analysis_logger
+        )
+        
+        if analysis_result:
+            await self.progress_manager.record_symbol_completed(task.id, symbol)
+            await self._increment_successful_count(task.id)
+            
+            # 保存分析结果到自选股分析记录
+            await self._save_watchlist_analysis_result(symbol, analysis_result)
+            
+            # 更新进度为100%
+            await self.progress_manager.update_progress(task.id, 100.0)
+            await self._update_task_progress(task.id, 100.0, 1)
+            
+            # 保存任务结果
+            await self._save_task_results(task.id, [analysis_result])
+            
+            logger.info(f"✨ 自选股票重新分析完成: {symbol}")
+            
+            return [analysis_result]
+        else:
+            error_msg = f"股票 {symbol} 分析失败"
+            await self.progress_manager.record_symbol_failed(task.id, symbol, error_msg)
+            await self._increment_failed_count(task.id)
+            analysis_logger.log_error('analysis_failed', error_msg)
+            raise ValueError(error_msg)
+    
+    async def _get_all_watchlist_symbols(self) -> List[str]:
+        """获取所有自选股票代码"""
+        try:
+            logger.info("🔍 开始获取自选股列表...")
+            # 导入自选股相关模型（从routes.py导入）
+            from backend.routes import Watchlist, SessionLocal as WatchlistSessionLocal
+            logger.info("✅ 成功导入Watchlist模型和SessionLocal")
+            
+            with WatchlistSessionLocal() as db:
+                logger.info("🔗 数据库连接已建立")
+                watchlist_items = db.query(Watchlist).all()
+                logger.info(f"📊 查询到 {len(watchlist_items)} 条自选股记录")
+                
+                symbols = [item.symbol for item in watchlist_items]
+                logger.info(f"📋 获取自选股列表: {len(symbols)} 只股票 - {symbols}")
+                return symbols
+                
+        except Exception as e:
+            logger.error(f"❌ 获取自选股列表失败: {e}")
+            logger.error(f"❌ 错误详情: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"❌ 错误堆栈: {traceback.format_exc()}")
+            return []
+    
+    async def _save_watchlist_analysis_result(self, symbol: str, analysis_result: dict):
+        """保存自选股分析结果到AnalysisRecord表"""
+        try:
+            # 导入分析记录模型（从routes.py导入）
+            from backend.routes import AnalysisRecord, SessionLocal as WatchlistSessionLocal
+            
+            with WatchlistSessionLocal() as db:
+                # 创建新的分析记录
+                analysis_record = AnalysisRecord(
+                    symbol=symbol,
+                    score=analysis_result.get('final_score'),  # 修复：使用final_score作为score字段
+                    action=analysis_result.get('action'),
+                    reason_brief=analysis_result.get('summary'),  # 修复：使用summary作为reason_brief
+                    ai_advice=analysis_result.get('ai_analysis'),  # 修复：使用ai_analysis作为ai_advice
+                    ai_confidence=analysis_result.get('ai_confidence'),
+                    fusion_score=analysis_result.get('fusion_score'),
+                    created_at=analysis_result.get('analyzed_at', now_bj())  # 修复：使用created_at而不是analyzed_at
+                )
+                
+                db.add(analysis_record)
+                db.commit()
+                
+                logger.info(f"✅ 自选股 {symbol} 分析结果已保存到AnalysisRecord")
+                
+        except Exception as e:
+            logger.error(f"❌ 保存自选股 {symbol} 分析结果失败: {e}")
+    
+    async def _update_watchlist_task_details(self, task: RecommendationTask, symbols: List[str], task_subtype: str):
+        """更新自选股任务详情信息"""
+        with SessionLocal() as db:
+            try:
+                db_task = db.query(RecommendationTask).filter(RecommendationTask.id == task.id).first()
+                if db_task:
+                    # 用户输入摘要
+                    if task_subtype == 'batch':
+                        if len(symbols) == await self._get_watchlist_total_count():
+                            db_task.user_input_summary = f"自选股批量分析 | 全部自选股 ({len(symbols)}只)"
+                        else:
+                            db_task.user_input_summary = f"自选股批量分析 | 指定股票 ({len(symbols)}只): {', '.join(symbols[:5])}{'...' if len(symbols) > 5 else ''}"
+                    else:  # reanalyze
+                        db_task.user_input_summary = f"自选股重新分析 | 股票代码: {symbols[0]}"
+                    
+                    # 筛选条件摘要
+                    db_task.filter_summary = "自选股票池 | 无额外筛选条件"
+                    
+                    # 执行策略说明
+                    if task_subtype == 'batch':
+                        db_task.execution_strategy = "获取自选股列表 → 技术分析 → AI深度分析 → 融合评分 → 更新分析记录"
+                    else:
+                        db_task.execution_strategy = "验证自选股 → 技术分析 → AI深度分析 → 融合评分 → 更新分析记录"
+                    
+                    db.commit()
+                    logger.info(f"✅ 自选股任务 {task.id} 详情信息已更新")
+                    
+            except Exception as e:
+                db.rollback()
+                logger.error(f"❌ 更新自选股任务详情失败: {e}")
+    
+    async def _get_watchlist_total_count(self) -> int:
+        """获取自选股总数"""
+        try:
+            # 导入自选股相关模型（从routes.py导入）
+            from backend.routes import Watchlist, SessionLocal as WatchlistSessionLocal
+            
+            with WatchlistSessionLocal() as db:
+                count = db.query(Watchlist).count()
+                return count
+                
+        except Exception as e:
+            logger.error(f"❌ 获取自选股总数失败: {e}")
+            return 0

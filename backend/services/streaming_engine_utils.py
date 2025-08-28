@@ -93,22 +93,12 @@ class StreamingEngineUtils:
             return {'confidence': 0, 'reasoning': ai_analysis}
     
     def _calculate_fusion_score(self, technical_score: float, ai_confidence: float, weights: dict) -> float:
-        """计算融合分数"""
-        # 检查空值
-        if technical_score is None or ai_confidence is None:
-            logger.warning(f"计算融合分失败: 技术分={technical_score}, AI信心度={ai_confidence}")
-            # 如果技术分为空，返回None
-            if technical_score is None:
-                return None
-            # 如果AI信心度为空，使用技术分
-            if ai_confidence is None:
-                ai_confidence = 0
-        
-        tech_weight = weights.get('technical', 0.4)
-        ai_weight = weights.get('macro_sentiment', 0.35) + weights.get('news_events', 0.25)
+        """计算融合分数（技术分 + AI信心度的加权平均）"""
+        tech_weight = weights.get('technical', 0.6)
+        ai_weight = weights.get('ai_confidence', 0.4)
         
         # 标准化分数到0-10范围
-        # 技术分从0-1范围映射到0-10范围
+        # 技术分从0-1范围映射到0-10范围（用于融合分计算）
         technical_normalized = max(0, min(10, technical_score * 10.0))
         # AI信心度已经是0-10范围
         ai_normalized = max(0, min(10, ai_confidence))
@@ -131,10 +121,10 @@ class StreamingEngineUtils:
         tech_score = technical_analysis.get('score', 0)
         ai_confidence = ai_scores.get('confidence', 0)
         
-        # 技术分映射到0-10范围用于显示
-        tech_score_display = tech_score * 10.0 if tech_score is not None else 0
+        # 技术分保持原始0-1范围显示（用于摘要）
+        tech_score_display = tech_score if tech_score is not None else 0
         
-        return f"技术面{action}信号(评分{tech_score_display:.1f})，AI信心度{ai_confidence:.1f}/10"
+        return f"技术面{action}信号(评分{tech_score_display:.2f})，AI信心度{ai_confidence:.1f}/10"
     
     def _extract_key_factors(self, ai_analysis: str) -> list:
         """从AI分析中提取关键因子"""

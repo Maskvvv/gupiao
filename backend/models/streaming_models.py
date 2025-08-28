@@ -23,7 +23,7 @@ class RecommendationTask(Base):
     
     # 任务基本信息
     id = Column(String(32), primary_key=True)  # UUID
-    task_type = Column(String(20), nullable=False)  # 'ai'|'keyword'|'market'
+    task_type = Column(String(20), nullable=False)  # 'ai'|'keyword'|'market'|'watchlist_batch'|'watchlist_reanalyze'
     status = Column(String(20), default='pending')  # 'pending'|'running'|'completed'|'failed'|'cancelled'
     priority = Column(Integer, default=5)  # 优先级 1-10
     

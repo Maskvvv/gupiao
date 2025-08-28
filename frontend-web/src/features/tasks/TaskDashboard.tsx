@@ -109,7 +109,9 @@ export const TaskDashboard: React.FC = () => {
     const typeMap = {
       'ai': 'AI推荐',
       'keyword': '关键词推荐',
-      'market': '全市场推荐'
+      'market': '全市场推荐',
+      'watchlist_batch': '批量分析',
+      'watchlist_reanalyze': '单股分析'
     };
     return typeMap[type as keyof typeof typeMap] || type;
   };
@@ -118,7 +120,9 @@ export const TaskDashboard: React.FC = () => {
     const colorMap = {
       'ai': 'blue',
       'keyword': 'green',
-      'market': 'purple'
+      'market': 'purple',
+      'watchlist_batch': 'orange',
+      'watchlist_reanalyze': 'cyan'
     };
     return colorMap[type as keyof typeof colorMap] || 'default';
   };
@@ -226,7 +230,7 @@ export const TaskDashboard: React.FC = () => {
       title: '操作',
       key: 'actions',
       width: 250,
-      render: (_, record: RecommendationTask) => (
+      render: (_: any, record: RecommendationTask) => (
         <Space>
           <Button 
             size="small" 
@@ -358,12 +362,14 @@ export const TaskDashboard: React.FC = () => {
               value={typeFilter}
               onChange={setTypeFilter}
               placeholder="筛选类型"
-              style={{ width: 120 }}
+              style={{ width: 140 }}
             >
               <Option value="all">全部类型</Option>
               <Option value="ai">AI推荐</Option>
               <Option value="keyword">关键词推荐</Option>
               <Option value="market">全市场推荐</Option>
+              <Option value="watchlist_batch">批量分析</Option>
+              <Option value="watchlist_reanalyze">单股分析</Option>
             </Select>
             
             <Button 

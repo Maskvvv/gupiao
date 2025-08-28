@@ -330,6 +330,92 @@ settings = Settings()
 - State Management: @tanstack/react-query
 - Language: TypeScript
 
+## 📘 TypeScript 编码规范
+
+### 类型安全规范 (强制执行)
+
+#### 隐式 any 类型问题处理
+**问题描述**: TypeScript 编译器经常报告 "参数隐式具有 'any' 类型" 错误
+
+**常见场景**:
+1. 函数参数未指定类型
+2. 回调函数参数类型推断失败
+3. 事件处理器参数类型缺失
+4. 数组方法回调参数类型不明确
+
+**解决方案**:
+```typescript
+// ❌ 错误写法 - 隐式 any 类型
+const handleClick = (event) => {
+  console.log(event.target);
+};
+
+const processData = (items) => {
+  return items.map((item) => item.name);
+};
+
+// ✅ 正确写法 - 显式类型注解
+const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+  console.log(event.target);
+};
+
+const processData = (items: Array<{name: string}>) => {
+  return items.map((item: {name: string}) => item.name);
+};
+
+// ✅ 或者使用接口定义
+interface DataItem {
+  name: string;
+  id: number;
+}
+
+const processData = (items: DataItem[]) => {
+  return items.map((item: DataItem) => item.name);
+};
+```
+
+**Ant Design 组件常见类型**:
+```typescript
+// Table 组件
+const columns = [
+  {
+    title: '操作',
+    render: (_: any, record: TaskRecord) => (
+      <Button onClick={() => handleAction(record)}>操作</Button>
+    ),
+  },
+];
+
+// Form 组件
+const onFinish = (values: FormValues) => {
+  console.log(values);
+};
+
+// Select 组件
+const handleChange = (value: string | string[]) => {
+  setSelectedValue(value);
+};
+```
+
+**强制规范**:
+1. **禁止使用隐式 any 类型** - 所有函数参数必须显式声明类型
+2. **优先使用接口定义** - 复杂对象类型使用 interface 定义
+3. **事件处理器类型** - 使用 React 提供的事件类型
+4. **回调函数类型** - 明确指定回调函数的参数和返回值类型
+5. **组件 Props 类型** - 所有组件必须定义 Props 接口
+
+**tsconfig.json 配置**:
+```json
+{
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true
+  }
+}
+```
+
 ### 开发工具
 - Python 3.8+
 - Node.js + npm

@@ -1,10 +1,21 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startBatchAnalyze, getBatchStatus, getBatchResult } from '@/api/watchlist'
-import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs, Dropdown, Tooltip } from 'antd'
+import { listWatchlist, addWatch, removeWatch, analyzeOne, type WatchItem, listHistory, startWatchlistBatchTask, getTaskStatus, getTaskResult, type TaskResponse, type TaskStatus, getTaskList } from '@/api/watchlist'
+import { App, Button, Card, Flex, Input, Space, Table, Typography, Drawer, Pagination, Divider, Progress, Modal, Tabs, Dropdown, Tooltip, Alert, Tag } from 'antd'
 import ActionBadge from '@/components/ActionBadge'
 import ReactECharts from 'echarts-for-react'
 import { DownOutlined } from '@ant-design/icons'
+
+// 任务类型中文映射
+const getTaskTypeLabel = (taskType: string): string => {
+  const typeMap: Record<string, string> = {
+    'watchlist_batch': '批量分析',
+    'watchlist_reanalyze': '单股分析',
+    'market_recommendation': '市场推荐',
+    // 可以根据需要添加更多任务类型
+  }
+  return typeMap[taskType] || taskType
+}
 
 export default function WatchlistPage() {
   const qc = useQueryClient()
@@ -22,6 +33,8 @@ export default function WatchlistPage() {
   const [batchItems, setBatchItems] = useState<any[]>([])
   const cancelRef = useRef(false)
   const [batchStatus, setBatchStatus] = useState<'idle'|'running'|'success'|'error'|'timeout'|'stopped'>('idle')
+  const [taskInfo, setTaskInfo] = useState<TaskStatus | null>(null)
+  const [runningTasks, setRunningTasks] = useState<TaskStatus[]>([])
   const [openQuote, setOpenQuote] = useState(false)
   const [quoteSymbol, setQuoteSymbol] = useState<string | null>(null)
   const [chartIdx, setChartIdx] = useState(0)
@@ -58,6 +71,30 @@ export default function WatchlistPage() {
   useEffect(() => {
     if (openQuote && quoteSymbol) setChartIdx(0)
   }, [openQuote, quoteSymbol])
+
+  // 定期检查正在运行的任务
+  useEffect(() => {
+    const checkRunningTasks = async () => {
+      try {
+        const tasks = await getTaskList()
+        const watchlistTasks = tasks.tasks.filter((task: TaskStatus) => 
+          (task.task_type === 'watchlist_batch' || task.task_type === 'watchlist_reanalyze') &&
+          (task.status === 'pending' || task.status === 'running')
+        )
+        setRunningTasks(watchlistTasks)
+      } catch (error) {
+        // 静默处理错误，避免频繁提示
+      }
+    }
+
+    // 立即检查一次
+    checkRunningTasks()
+    
+    // 每10秒检查一次
+    const interval = setInterval(checkRunningTasks, 10000)
+    
+    return () => clearInterval(interval)
+  }, [])
 
   // 监听窗口尺寸变化，保证弹窗宽度在小屏不溢出
   useEffect(() => {
@@ -138,17 +175,19 @@ export default function WatchlistPage() {
       if (provider) payload.provider = provider
       if (typeof temperature === 'number') payload.temperature = temperature
       if (apiKey) payload.api_key = apiKey
-      const r = await startBatchAnalyze(payload)
-      return r.task_id
+      const r = await startWatchlistBatchTask(payload)
+      return r
     },
-    onSuccess: (tid) => {
-      if (!tid) { message.error('未获得任务ID'); return }
+    onSuccess: (response: TaskResponse) => {
+      if (!response.task_id) { message.error('未获得任务ID'); return }
       setBatchItems([])
       setPercent(0)
-      setTaskId(tid)
+      setTaskId(response.task_id)
       setBatchOpen(true)
       setBatchStatus('running')
-      try { localStorage.setItem('watch_batch_tid', String(tid)) } catch {}
+      setTaskInfo(null)
+      try { localStorage.setItem('watch_batch_tid', String(response.task_id)) } catch {}
+      message.success(`任务已创建：${response.message || '开始分析'}`)
     },
     onError: (e: any) => message.error(e?.message || '批量分析启动失败'),
   })
@@ -158,31 +197,57 @@ export default function WatchlistPage() {
     setBatchStatus('running')
     try {
       const startAt = Date.now()
-      // 轮询进度
+      // 轮询任务状态
       while (!cancelRef.current) {
-        const s = await getBatchStatus(tid)
-        if (s?.status === 'not_found') { message.warning('任务不存在或已过期'); setBatchStatus('error'); break }
-        if (typeof s?.percent === 'number') setPercent(Math.max(0, Math.min(100, s.percent)))
-        if (s?.status === 'done' || s?.status === 'error') break
-        if (Date.now() - startAt > 120000) { message.warning('轮询超时，已停止'); setBatchStatus('timeout'); cancelRef.current = true; break }
-        await new Promise(r => setTimeout(r, 600))
-      }
-      // 获取结果
-      if (!cancelRef.current) {
-        const res = await getBatchResult(tid)
-        if ((res as any)?.error) {
-          message.error(`任务失败：${(res as any).error}`)
+        const taskStatus = await getTaskStatus(tid)
+        setTaskInfo(taskStatus)
+        
+        if (!taskStatus) {
+          message.warning('任务不存在或已过期')
           setBatchStatus('error')
-        } else if (res && Array.isArray(res.items) && res.items.length) {
-          setBatchItems(res.items)
-          message.success('批量分析完成')
-          setBatchStatus('success')
-          qc.invalidateQueries({ queryKey: ['watchlist'] })
-        } else {
-          message.info('批量任务无结果返回')
-          setBatchStatus('success')
+          break
         }
-        try { localStorage.removeItem('watch_batch_tid') } catch {}
+        
+        // 更新进度
+        const progress = taskStatus.total_items > 0 
+          ? Math.round((taskStatus.processed_items / taskStatus.total_items) * 100)
+          : taskStatus.progress
+        setPercent(Math.max(0, Math.min(100, progress)))
+        
+        // 检查任务状态
+        if (taskStatus.status === 'completed') {
+          // 获取任务结果
+          const result = await getTaskResult(tid)
+          if (result.error) {
+            message.error(`任务失败：${result.error}`)
+            setBatchStatus('error')
+          } else if (result.result && Array.isArray(result.result.analysis_results)) {
+            setBatchItems(result.result.analysis_results)
+            message.success('批量分析完成')
+            setBatchStatus('success')
+            qc.invalidateQueries({ queryKey: ['watchlist'] })
+          } else {
+            message.info('批量任务无结果返回')
+            setBatchStatus('success')
+          }
+          try { localStorage.removeItem('watch_batch_tid') } catch {}
+          break
+        } else if (taskStatus.status === 'failed' || taskStatus.status === 'cancelled') {
+          message.error(`任务${taskStatus.status === 'failed' ? '失败' : '已取消'}：${taskStatus.error_message || '未知错误'}`)
+          setBatchStatus('error')
+          try { localStorage.removeItem('watch_batch_tid') } catch {}
+          break
+        }
+        
+        // 超时检查
+        if (Date.now() - startAt > 300000) { // 5分钟超时
+          message.warning('轮询超时，已停止')
+          setBatchStatus('timeout')
+          cancelRef.current = true
+          break
+        }
+        
+        await new Promise(r => setTimeout(r, 1000)) // 1秒轮询间隔
       }
     } catch (e: any) {
       message.error(e?.message || '轮询失败')
@@ -210,25 +275,9 @@ export default function WatchlistPage() {
   const columns = [
     { title: '股票代码', dataIndex: '股票代码', width: 120 },
     { title: '股票名称', dataIndex: '股票名称', width: 140 },
-    // 移除原“综合评分”列，改为“融合分”独立展示
-    {
-      title: '融合分',
-      dataIndex: '融合分',
-      width: 100,
-      render: (v: number | null, r: WatchItem) => (
-        <Tooltip
-          placement="top"
-          title={
-            <div style={{ lineHeight: 1.5 }}>
-              <div>技术分：{fmt2(r.综合评分)}</div>
-              <div>AI信心：{fmt2((r as any)?.AI信心)}</div>
-            </div>
-          }
-        >
-          <span>{fmt2(v)}</span>
-        </Tooltip>
-      )
-    },
+    { title: '技术分', dataIndex: '技术分', width: 80, render: (v: number | null) => fmt2(v) },
+    { title: 'AI信心', dataIndex: 'AI信心', width: 80, render: (v: number | null) => fmt2(v) },
+    { title: '融合分', dataIndex: '融合分', width: 80, render: (v: number | null) => fmt2(v) },
     { title: '操作建议', dataIndex: '操作建议', width: 120, render: (v: string | null) => <ActionBadge action={v} /> },
     {
       title: '理由摘要',
@@ -342,6 +391,65 @@ export default function WatchlistPage() {
           </Button>
          </Flex>
 
+        {/* 正在进行的任务状态显示 */}
+        {runningTasks.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <Alert
+              type="info"
+              showIcon
+              message="正在进行的分析任务"
+              description={
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  {runningTasks.map(task => (
+                    <div key={task.task_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ flex: 1 }}>
+                        <Space>
+                          <Tag color={task.status === 'running' ? 'processing' : 'default'}>
+                            {getTaskTypeLabel(task.task_type)}
+                          </Tag>
+                          <Typography.Text type="secondary">
+                            {task.status === 'running' ? '进行中' : '等待中'}
+                            {task.total_items > 0 && (
+                              <span> ({task.processed_items}/{task.total_items})</span>
+                            )}
+                          </Typography.Text>
+                          {task.user_input_summary && (
+                            <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                              | {task.user_input_summary}
+                            </Typography.Text>
+                          )}
+                        </Space>
+                        {task.status === 'running' && task.total_items > 0 && (
+                          <Progress 
+                            percent={Math.round((task.processed_items / task.total_items) * 100)} 
+                            size="small" 
+                            style={{ marginTop: 4, maxWidth: 200 }}
+                          />
+                        )}
+                      </div>
+                      <Button 
+                        size="small" 
+                        type="link" 
+                        onClick={() => {
+                          setTaskId(task.task_id)
+                          setBatchOpen(true)
+                          setBatchStatus('running')
+                          setTaskInfo(task)
+                          if (task.task_id) {
+                            pollBatch(task.task_id)
+                          }
+                        }}
+                      >
+                        查看详情
+                      </Button>
+                    </div>
+                  ))}
+                </Space>
+              }
+            />
+          </div>
+        )}
+
         <div className="table-responsive">
           <Table
             sticky
@@ -374,7 +482,7 @@ export default function WatchlistPage() {
               dataSource={hist?.items || []}
               columns={[
                  { title: '时间', dataIndex: '时间', key: 't', width: 180 },
-                 { title: '技术分', dataIndex: '综合评分', key: 's', width: 80, render: (v: any) => fmt2(v) },
+                 { title: '技术分', dataIndex: '技术分', key: 's', width: 80, render: (v: any) => fmt2(v) },
                  { title: 'AI信心', dataIndex: 'AI信心', key: 'c', width: 80, render: (v: any) => fmt2(v) },
                  { title: '融合分', dataIndex: '融合分', key: 'f', width: 80, render: (v: any) => fmt2(v) },
                  { title: '建议', dataIndex: '操作建议', key: 'a', width: 120, render: (v: any) => <ActionBadge action={v} /> },
@@ -419,6 +527,14 @@ export default function WatchlistPage() {
               <Typography.Paragraph type={batchStatus==='error'?'danger': batchStatus==='success'?'success': undefined}>
                 状态：{batchStatus === 'running' ? '分析中…' : batchStatus === 'success' ? '已完成' : batchStatus === 'error' ? '出错' : batchStatus === 'timeout' ? '超时' : '已停止'}
               </Typography.Paragraph>
+              {taskInfo && (
+                <div style={{ marginBottom: 8 }}>
+                  <Typography.Text type="secondary">
+                    进度：{taskInfo.processed_items}/{taskInfo.total_items} 
+                    {taskInfo.user_input_summary && ` | ${taskInfo.user_input_summary}`}
+                  </Typography.Text>
+                </div>
+              )}
               <Progress percent={percent} status={percent>=100? 'success' : 'active'} />
               <Space>
                 <Button onClick={() => { cancelRef.current = true; setBatchStatus('stopped'); message.info('已停止轮询') }}>停止轮询</Button>
