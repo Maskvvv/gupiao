@@ -189,7 +189,7 @@ const AnalysisLogViewer: React.FC<AnalysisLogViewerProps> = ({ taskId }) => {
       title: '操作',
       key: 'action',
       width: 100,
-      render: (_, record: AnalysisLog) => (
+      render: (_: any, record: AnalysisLog) => (
         <Button 
           type="text" 
           size="small" 
@@ -325,6 +325,8 @@ const AnalysisLogViewer: React.FC<AnalysisLogViewerProps> = ({ taskId }) => {
               showQuickJumper: true,
               showTotal: (total) => `共 ${total} 条日志`
             }}
+            scroll={{ x: 1200, y: 500 }}
+            sticky
             expandable={{
               expandedRowRender: (record: AnalysisLog) => (
                 <div style={{ margin: 0, padding: '8px 24px' }}>
