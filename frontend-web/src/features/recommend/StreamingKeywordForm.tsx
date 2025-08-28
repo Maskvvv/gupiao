@@ -56,6 +56,22 @@ const StreamingKeywordForm: React.FC = () => {
   const [screeningStartTime, setScreeningStartTime] = useState<number | null>(null);
   const [screeningDuration, setScreeningDuration] = useState<number>(0);
   const [showOptimizationTips, setShowOptimizationTips] = useState(false);
+  const [estimatedTime, setEstimatedTime] = useState(0);
+  const [screeningProgress, setScreeningProgress] = useState(0);
+  const [encouragementText, setEncouragementText] = useState('');
+  const [screeningStats, setScreeningStats] = useState({ processed: 0, total: 4000 });
+
+  // 鼓励文案数组
+  const encouragementMessages = [
+    '🎯 AI正在为您精挑细选最优质的投资机会...',
+    '💎 好股票值得等待，AI正在深度挖掘价值洼地...',
+    '🚀 智能算法正在分析市场趋势，寻找潜力股...',
+    '⭐ 耐心一点，AI正在为您筛选明日之星...',
+    '🔥 数据海洋中淘金，AI正在发现隐藏的投资机会...',
+    '💰 好的投资需要时间验证，AI正在严格把关...',
+    '🎪 让AI为您做功课，专业的事交给专业的算法...',
+    '🌟 每一秒的等待都是为了更精准的推荐...'
+  ];
 
   // 创建任务的 mutation
   const createTaskMutation = useMutation({
@@ -198,6 +214,35 @@ const StreamingKeywordForm: React.FC = () => {
   }, [currentTask, aiPhase, screeningStartTime]);
   
   // 监控筛选阶段时长，超过8秒显示优化提示
+  useEffect(() => {
+    if (aiPhase === 'screening' && screeningStartTime) {
+      const timer = setInterval(() => {
+        const elapsed = Date.now() - screeningStartTime;
+        const progress = Math.min((elapsed / 15000) * 100, 95); // 15秒内完成筛选
+        setScreeningProgress(progress);
+        
+        // 动态估算剩余时间
+        const remaining = Math.max(15 - elapsed / 1000, 0);
+        setEstimatedTime(remaining);
+        
+        // 模拟筛选统计数据
+        const processedCount = Math.min(Math.floor((elapsed / 15000) * 4000), 3950);
+        setScreeningStats({ processed: processedCount, total: 4000 });
+        
+        // 每3秒随机切换鼓励文案
+        if (Math.floor(elapsed / 3000) !== Math.floor((elapsed - 500) / 3000)) {
+          const randomIndex = Math.floor(Math.random() * encouragementMessages.length);
+          setEncouragementText(encouragementMessages[randomIndex]);
+        }
+        
+        if (elapsed > 8000 && !showOptimizationTips) {
+          setShowOptimizationTips(true);
+        }
+      }, 500);
+      
+      return () => clearInterval(timer);
+    }
+  }, [aiPhase, screeningStartTime, showOptimizationTips, encouragementMessages]);
   useEffect(() => {
     if (aiPhase === 'screening' && screeningStartTime) {
       const timer = setTimeout(() => {
@@ -414,42 +459,71 @@ const StreamingKeywordForm: React.FC = () => {
                     <Timeline>
                       <Timeline.Item 
                         color={aiPhase === 'screening' ? 'blue' : 'green'}
-                        dot={aiPhase === 'screening' ? <Spin indicator={<LoadingOutlined spin />} /> : <CheckCircleOutlined />}
+                        dot={aiPhase === 'screening' ? <LoadingOutlined spin /> : <CheckCircleOutlined />}
                       >
                         <div>
-                          <Text strong>AI股票筛选</Text>
+                          <Text strong>🧠 AI智能筛选</Text>
                           {aiPhase === 'screening' && (
                             <>
-                              <Tag color="processing" style={{ marginLeft: 8 }}>进行中</Tag>
-                              <Text type="secondary" style={{ marginLeft: 8 }}>
-                                AI正在从全市场筛选相关股票...
-                              </Text>
+                              <Tag color="processing" style={{ marginLeft: 8 }}>筛选中</Tag>
+                              <div style={{ marginTop: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <Text type="secondary">🔍 正在分析全市场股票池...</Text>
+                                  {estimatedTime > 0 && (
+                                    <Tag color="cyan">预计还需 {Math.ceil(estimatedTime)}秒</Tag>
+                                  )}
+                                </div>
+                                {screeningProgress > 0 && (
+                                  <Progress 
+                                    percent={Math.round(screeningProgress)} 
+                                    size="small" 
+                                    status="active"
+                                    strokeColor={{
+                                      '0%': '#108ee9',
+                                      '100%': '#87d068',
+                                    }}
+                                    style={{ marginTop: 4, maxWidth: 200 }}
+                                  />
+                                )}
+                              </div>
                             </>
                           )}
                           {aiPhase !== 'screening' && screeningDuration > 0 && (
-                            <Text type="secondary" style={{ marginLeft: 8 }}>
-                              耗时 {(screeningDuration / 1000).toFixed(1)}秒
-                            </Text>
+                            <>
+                              <Tag color="success" style={{ marginLeft: 8 }}>已完成</Tag>
+                              <Text type="secondary" style={{ marginLeft: 8 }}>
+                                ⚡ 耗时 {(screeningDuration / 1000).toFixed(1)}秒
+                              </Text>
+                            </>
                           )}
                         </div>
                       </Timeline.Item>
                       <Timeline.Item 
                         color={aiPhase === 'analyzing' ? 'blue' : aiPhase === 'completed' ? 'green' : 'gray'}
-                        dot={aiPhase === 'analyzing' ? <Spin indicator={<LoadingOutlined spin />} /> : 
-                             aiPhase === 'completed' ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+                        dot={aiPhase === 'analyzing' ? <LoadingOutlined spin /> : 
+                          aiPhase === 'completed' ? <CheckCircleOutlined /> : <ClockCircleOutlined />
+                        }
                       >
                         <div>
-                          <Text strong>深度分析</Text>
+                          <Text strong>📊 深度分析</Text>
                           {aiPhase === 'analyzing' && (
                             <>
                               <Tag color="processing" style={{ marginLeft: 8 }}>分析中</Tag>
-                              <Text type="secondary" style={{ marginLeft: 8 }}>
-                                并行分析候选股票，生成推荐评分...
-                              </Text>
+                              <div style={{ marginTop: 8 }}>
+                                <Text type="secondary">⚡ 并行分析候选股票，生成推荐评分...</Text>
+                                <div style={{ marginTop: 4 }}>
+                                  <Tag color="blue">🧠 AI评估</Tag>
+                                  <Tag color="green">📈 技术分析</Tag>
+                                  <Tag color="orange">📰 基本面</Tag>
+                                </div>
+                              </div>
                             </>
                           )}
                           {aiPhase === 'completed' && (
-                            <Tag color="success" style={{ marginLeft: 8 }}>已完成</Tag>
+                            <>
+                              <Tag color="success" style={{ marginLeft: 8 }}>✅ 已完成</Tag>
+                              <Text type="secondary" style={{ marginLeft: 8 }}>🎉 推荐结果已生成</Text>
+                            </>
                           )}
                         </div>
                       </Timeline.Item>
@@ -490,7 +564,7 @@ const StreamingKeywordForm: React.FC = () => {
                                currentTask.status === 'failed' ? '#cf1322' : '#1890ff' 
                       }}
                       prefix={
-                        currentTask.status === 'running' ? <RobotOutlined spin /> :
+                        currentTask.status === 'running' ? <RobotOutlined /> :
                         currentTask.status === 'completed' ? <CheckCircleOutlined /> :
                         currentTask.status === 'failed' ? <CloseCircleOutlined /> : null
                       }
@@ -530,9 +604,25 @@ const StreamingKeywordForm: React.FC = () => {
                     />
                     
                     {aiPhase === 'screening' && currentTask.progress_percent < 5 && (
-                      <div style={{ textAlign: 'center', marginTop: 8 }}>
-                        <Spin indicator={<LoadingOutlined spin />} />
-                        <Text type="secondary" style={{ marginLeft: 8 }}>AI正在智能筛选股票池，请稍候...</Text>
+                      <div style={{ 
+                        textAlign: 'center', 
+                        marginTop: 12,
+                        padding: '12px',
+                        background: 'linear-gradient(135deg, #f6f9fc 0%, #e9f4ff 100%)',
+                        borderRadius: '6px',
+                        border: '1px solid #d9e9ff'
+                      }}>
+                        <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#1890ff', marginBottom: 6 }}>
+                          🤖 AI智能筛选中...
+                        </div>
+                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                          {encouragementText || '正在分析全市场股票，为您精选优质标的'}
+                        </Text>
+                        {estimatedTime > 0 && (
+                          <div style={{ marginTop: 6, fontSize: '11px', color: '#666' }}>
+                            预计还需 <Text strong style={{ color: '#1890ff' }}>{Math.ceil(estimatedTime)}</Text> 秒
+                          </div>
+                        )}
                       </div>
                     )}
                   </>
@@ -542,7 +632,7 @@ const StreamingKeywordForm: React.FC = () => {
                   <div style={{ marginTop: 12 }}>
                     <Text type="secondary">当前分析: </Text>
                     <Tooltip title="正在进行技术分析和AI深度评估">
-                      <Tag color="processing" icon={<LoadingOutlined />}>
+                      <Tag color="processing">
                         {currentTask.current_symbol}
                       </Tag>
                     </Tooltip>

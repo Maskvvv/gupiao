@@ -21,3 +21,67 @@ html, body, #root { height: 100%; }
   .container { padding: 0 6px; }
   .table-responsive .ant-table { min-width: 560px; }
 }
+
+/* AI等待界面动画效果 */
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fadeInUp {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* AI筛选等待区域样式 */
+.ai-screening-container {
+  animation: fadeInUp 0.5s ease-out;
+}
+
+.ai-screening-container .ant-progress-line {
+  animation: fadeInUp 0.3s ease-out 0.2s both;
+}
+
+/* 增强视觉效果的渐变背景 */
+.screening-gradient-bg {
+  background: linear-gradient(135deg, #f6f9fc 0%, #e9f4ff 50%, #f0f8ff 100%);
+  background-size: 200% 200%;
+  animation: gradientShift 4s ease-in-out infinite;
+}
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
