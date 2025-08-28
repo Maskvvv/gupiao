@@ -42,7 +42,8 @@ class StreamingRecommendationEngine:
         
         # 默认权重配置
         self.default_weights = {
-            "technical": 0.4,
+            "technical": 0.6,
+            "ai_confidence": 0.4,
             "macro_sentiment": 0.35,
             "news_events": 0.25
         }

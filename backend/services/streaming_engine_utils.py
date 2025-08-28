@@ -4,11 +4,20 @@
 """
 import json
 import logging
+import os
 from typing import Dict, Any, List, Optional
 from backend.models.streaming_models import (
     RecommendationTask, RecommendationResult, TaskProgress, SessionLocal, now_bj
 )
 from .confidence_fusion import extract_confidence_and_fusion
+
+# 从环境变量获取投资建议阈值配置
+BUY_THRESHOLD = float(os.getenv("BUY_THRESHOLD", "7.0"))
+HOLD_THRESHOLD = float(os.getenv("HOLD_THRESHOLD", "4.0"))
+
+# 初始化时打印配置值
+print(f"[CONFIG] BUY_THRESHOLD = {BUY_THRESHOLD}")
+print(f"[CONFIG] HOLD_THRESHOLD = {HOLD_THRESHOLD}")
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +103,17 @@ class StreamingEngineUtils:
     
     def _calculate_fusion_score(self, technical_score: float, ai_confidence: float, weights: dict) -> float:
         """计算融合分数（技术分 + AI信心度的加权平均）"""
+        # 从权重配置中获取技术分权重，如果没有ai_confidence权重，则用(1-technical)作为AI权重
         tech_weight = weights.get('technical', 0.6)
-        ai_weight = weights.get('ai_confidence', 0.4)
+        ai_weight = weights.get('ai_confidence')
+        
+        # 如果没有明确的ai_confidence权重，使用(1-technical)作为AI权重
+        if ai_weight is None:
+            ai_weight = 1.0 - tech_weight
+        
+        # 确保权重在合理范围内
+        tech_weight = max(0.0, min(1.0, tech_weight))
+        ai_weight = max(0.0, min(1.0, ai_weight))
         
         # 标准化分数到0-10范围
         # 技术分从0-1范围映射到0-10范围（用于融合分计算）
@@ -104,13 +122,17 @@ class StreamingEngineUtils:
         ai_normalized = max(0, min(10, ai_confidence))
         
         fusion_score = technical_normalized * tech_weight + ai_normalized * ai_weight
+        
+        # 添加调试日志
+        logger.debug(f"融合分计算: 技术分{technical_score:.3f}(标准化{technical_normalized:.1f}) * {tech_weight:.2f} + AI信心{ai_confidence:.1f} * {ai_weight:.2f} = {fusion_score:.2f}")
+        
         return max(0, min(10, fusion_score))
     
     def _determine_action(self, fusion_score: float) -> str:
         """根据融合分数确定投资建议"""
-        if fusion_score >= 6.5:
+        if fusion_score >= BUY_THRESHOLD:
             return "buy"
-        elif fusion_score >= 4.0:
+        elif fusion_score >= HOLD_THRESHOLD:
             return "hold"
         else:
             return "sell"
