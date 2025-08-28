@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query
 from typing import List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import sessionmaker
-from .routes import SessionLocal, Recommendation, RecommendationItem
+from backend.routes import SessionLocal, Recommendation, RecommendationItem
 
 rec_router = APIRouter()
 

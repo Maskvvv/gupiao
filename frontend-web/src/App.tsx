@@ -4,6 +4,7 @@ import WatchlistPage from '@/features/watchlist/pages/WatchlistPage'
 import RecommendPage from '@/features/recommend/pages/RecommendPage'
 import RecommendHistoryPage from '@/features/recommend/pages/RecommendHistoryPage'
 import KeywordRecommendPage from '@/features/recommend/pages/KeywordRecommendPage'
+import TasksPage from '@/features/tasks/pages/TasksPage'
 import AdvancedSettingsPage from '@/features/settings/pages/AdvancedSettingsPage'
 import { SettingOutlined, MenuOutlined } from '@ant-design/icons'
 import { useEffect, useMemo, useState } from 'react'
@@ -27,12 +28,14 @@ export default function App() {
     { key: '/', label: <Link to="/">自选股</Link> },
     { key: '/ai', label: <Link to="/ai">AI 推荐</Link> },
     { key: '/keyword', label: <Link to="/keyword">关键词推荐</Link> },
+    { key: '/tasks', label: <Link to="/tasks">任务管理</Link> },
     { key: '/history', label: <Link to="/history">推荐历史</Link> },
   ]), [])
   const itemsMobile = useMemo(() => ([
     { key: '/', label: '自选股' },
     { key: '/ai', label: 'AI 推荐' },
     { key: '/keyword', label: '关键词推荐' },
+    { key: '/tasks', label: '任务管理' },
     { key: '/history', label: '推荐历史' },
   ]), [])
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -96,6 +99,7 @@ export default function App() {
           <Route path="/" element={<WatchlistPage />} />
           <Route path="/ai" element={<RecommendPage />} />
           <Route path="/keyword" element={<KeywordRecommendPage />} />
+          <Route path="/tasks" element={<TasksPage />} />
           <Route path="/history" element={<RecommendHistoryPage />} />
           <Route path="/settings" element={<AdvancedSettingsPage />} />
         </Routes>

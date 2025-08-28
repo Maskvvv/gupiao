@@ -1,10 +1,11 @@
 from fastapi import APIRouter
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
-from .services.data_fetcher import DataFetcher
-from .services.analyzer import basic_analysis
-from .services.ai_router import AIRouter, AIRequest
-from .services.enhanced_analyzer import EnhancedAnalyzer
+from backend.services.data_fetcher import DataFetcher
+from backend.services.analyzer import basic_analysis
+from backend.services.ai_router import AIRouter, AIRequest
+from backend.services.enhanced_analyzer import EnhancedAnalyzer
 
 import os
 import time

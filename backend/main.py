@@ -19,12 +19,16 @@ app.add_middleware(
 )
 
 # 集成模块路由
-from .routes import router as api_router
-from .routes_recommends import rec_router as rec_history_router
-from .services.performance_scheduler import performance_scheduler
+from backend.routes import router as api_router
+from backend.routes_streaming import streaming_router as streaming_api_router
+from backend.routes_analysis_logs import analysis_logs_router
+from backend.services.performance_scheduler import performance_scheduler
+from backend.services.sse_manager import sse_manager
+from backend.services.ai_router_bridge import unified_ai_router
 
 app.include_router(api_router, prefix="/api")
-app.include_router(rec_history_router, prefix="/api")
+app.include_router(streaming_api_router)  # 已包含 /api/v2 前缀
+app.include_router(analysis_logs_router)  # 分析日志API
 
 # 启动性能调度器
 @app.on_event("startup")
@@ -33,6 +37,15 @@ async def startup_event():
     # 启动性能缓存定时任务
     performance_scheduler.start()
     print("[系统] 性能缓存调度器已启动")
+    
+    # 初始化流式推荐系统
+    print("[系统] 流式推荐系统已初始化")
+    print("[系统] AI路由器桥接已加载")
+    
+    # 启动SSE连接清理任务
+    import asyncio
+    asyncio.create_task(cleanup_sse_connections())
+    print("[系统] SSE连接清理任务已启动")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -40,6 +53,21 @@ async def shutdown_event():
     # 停止性能缓存定时任务
     performance_scheduler.stop()
     print("[系统] 性能缓存调度器已停止")
+    
+    # 清理SSE连接
+    await sse_manager.cleanup_dead_connections()
+    print("[系统] SSE连接已清理")
+
+# SSE连接清理任务
+async def cleanup_sse_connections():
+    """定期清理死连接"""
+    import asyncio
+    while True:
+        try:
+            await sse_manager.cleanup_dead_connections()
+            await asyncio.sleep(60)  # 每分钟清理一次
+        except Exception as e:
+            print(f"[错误] SSE清理任务异常: {e}")
 
 # 注册程序退出时的清理函数
 def cleanup():

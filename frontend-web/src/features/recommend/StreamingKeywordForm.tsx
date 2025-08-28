@@ -1,0 +1,627 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Card,
+  Form,
+  Input,
+  Select,
+  Button,
+  Row,
+  Col,
+  InputNumber,
+  Switch,
+  Space,
+  Progress,
+  Statistic,
+  Tag,
+  Typography,
+  Alert,
+  List,
+  Empty,
+  message,
+  Skeleton,
+  Timeline,
+  Spin,
+  Badge,
+  Tooltip
+} from 'antd';
+import {
+  SearchOutlined,
+  ThunderboltOutlined,
+  PlayCircleOutlined,
+  PauseCircleOutlined,
+  ReloadOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  LoadingOutlined,
+  RobotOutlined,
+  BarChartOutlined,
+  ClockCircleOutlined,
+  BulbOutlined
+} from '@ant-design/icons';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { taskApi } from '../../api/tasks';
+import type { KeywordRecommendationRequest, RecommendationTask, TaskResult } from '../../types/tasks';
+import RecommendationResultCard from './RecommendationResultCard';
+
+const { Option } = Select;
+const { Text } = Typography;
+
+const StreamingKeywordForm: React.FC = () => {
+  const [form] = Form.useForm();
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [results, setResults] = useState<TaskResult[]>([]);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [aiPhase, setAiPhase] = useState<'idle' | 'screening' | 'analyzing' | 'completed'>('idle');
+  const [screeningStartTime, setScreeningStartTime] = useState<number | null>(null);
+  const [screeningDuration, setScreeningDuration] = useState<number>(0);
+  const [showOptimizationTips, setShowOptimizationTips] = useState(false);
+
+  // 创建任务的 mutation
+  const createTaskMutation = useMutation({
+    mutationFn: async (request: KeywordRecommendationRequest) => {
+      return await taskApi.createAndStartKeywordRecommendation(request);
+    },
+    onSuccess: (data) => {
+      setCurrentTaskId(data.task_id);
+      setIsStreaming(true);
+      startSSEConnection(data.task_id);
+      message.success('任务创建成功，开始流式推荐');
+    },
+    onError: (error) => {
+      console.error('创建任务失败:', error);
+      message.error('创建任务失败，请重试');
+    }
+  });
+
+  // 启动任务的 mutation
+  const startTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      return await taskApi.startTask(taskId);
+    },
+    onSuccess: () => {
+      message.success('任务启动成功');
+    },
+    onError: (error) => {
+      console.error('启动任务失败:', error);
+      message.error('启动任务失败，请重试');
+    }
+  });
+
+  // 取消任务的 mutation
+  const cancelTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      return await taskApi.cancelTask(taskId);
+    },
+    onSuccess: () => {
+      setIsStreaming(false);
+      stopSSEConnection();
+      message.success('任务已取消');
+    },
+    onError: (error) => {
+      console.error('取消任务失败:', error);
+      message.error('取消任务失败，请重试');
+    }
+  });
+
+  // 查询当前任务状态
+  const { data: currentTask } = useQuery({
+    queryKey: ['taskStatus', currentTaskId],
+    queryFn: () => currentTaskId ? taskApi.getTaskStatus(currentTaskId) : null,
+    enabled: !!currentTaskId,
+    refetchInterval: isStreaming ? 2000 : false,
+  });
+
+  // 查询任务结果
+  const { data: taskResults } = useQuery({
+    queryKey: ['taskResults', currentTaskId],
+    queryFn: () => currentTaskId ? taskApi.getTaskResults(currentTaskId, true) : [],
+    enabled: !!currentTaskId && currentTask?.status === 'completed',
+  });
+
+  // 启动SSE连接
+  const startSSEConnection = (taskId: string) => {
+    if (eventSource) {
+      eventSource.close();
+    }
+
+    const url = `/api/v2/tasks/${taskId}/stream`;
+    const source = new EventSource(url);
+
+    source.onopen = () => {
+      console.log('SSE连接已建立');
+    };
+
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('收到SSE消息:', data);
+        
+        if (data.event === 'task_update') {
+          // 任务状态更新已通过React Query处理
+        } else if (data.event === 'task_completed') {
+          setIsStreaming(false);
+          message.success('推荐任务完成');
+        } else if (data.event === 'task_failed') {
+          setIsStreaming(false);
+          message.error('推荐任务失败: ' + (data.data?.error || '未知错误'));
+        } else if (data.event === 'recommendation_result') {
+          setResults(prev => [...prev, data.data]);
+        }
+      } catch (error) {
+        console.error('解析SSE消息失败:', error);
+      }
+    };
+
+    source.onerror = (error) => {
+      console.error('SSE连接错误:', error);
+      if (source.readyState === EventSource.CLOSED) {
+        setIsStreaming(false);
+      }
+    };
+
+    setEventSource(source);
+  };
+
+  // 停止SSE连接
+  const stopSSEConnection = () => {
+    if (eventSource) {
+      eventSource.close();
+      setEventSource(null);
+    }
+  };
+
+  // 监控AI阶段变化
+  useEffect(() => {
+    if (currentTask) {
+      if (currentTask.status === 'running' && currentTask.progress_percent < 5) {
+        // 任务刚开始，可能在AI股票筛选阶段
+        if (aiPhase !== 'screening') {
+          setAiPhase('screening');
+          setScreeningStartTime(Date.now());
+          setShowOptimizationTips(false);
+        }
+      } else if (currentTask.progress_percent >= 5) {
+        // 进入股票分析阶段
+        if (aiPhase === 'screening') {
+          setAiPhase('analyzing');
+          if (screeningStartTime) {
+            setScreeningDuration(Date.now() - screeningStartTime);
+          }
+        }
+      }
+      
+      if (currentTask.status === 'completed') {
+        setAiPhase('completed');
+      }
+    }
+  }, [currentTask, aiPhase, screeningStartTime]);
+  
+  // 监控筛选阶段时长，超过8秒显示优化提示
+  useEffect(() => {
+    if (aiPhase === 'screening' && screeningStartTime) {
+      const timer = setTimeout(() => {
+        setShowOptimizationTips(true);
+      }, 8000); // 8秒后显示提示
+      
+      return () => clearTimeout(timer);
+    }
+  }, [aiPhase, screeningStartTime]);
+
+  // 组件卸载时清理SSE连接
+  useEffect(() => {
+    return () => {
+      stopSSEConnection();
+    };
+  }, []);
+
+  // 处理表单提交
+  const handleSubmit = (values: any) => {
+    const request: KeywordRecommendationRequest = {
+      keyword: values.keyword,
+      period: values.period,
+      max_candidates: values.max_candidates,
+      weights: {
+        technical: values.technical_weight,
+        macro_sentiment: values.macro_weight,
+        news_events: values.news_weight,
+      },
+      filter_config: {
+        exclude_st: values.exclude_st,
+        min_market_cap: values.min_market_cap,
+        board: values.board === 'all' ? undefined : values.board,
+      },
+      ai_config: {
+        provider: values.provider,
+        temperature: values.temperature,
+      },
+      priority: 1
+    };
+
+    createTaskMutation.mutate(request);
+  };
+
+  return (
+    <div className="streaming-keyword-form">
+      <Card 
+        title={
+          <span>
+            <SearchOutlined />
+            关键词流式推荐
+          </span>
+        }
+        extra={
+          currentTaskId && (
+            <Space>
+              {currentTask?.status === 'pending' && (
+                <Button 
+                  type="primary" 
+                  icon={<PlayCircleOutlined />}
+                  onClick={() => startTaskMutation.mutate(currentTaskId)}
+                  loading={startTaskMutation.isPending}
+                >
+                  启动任务
+                </Button>
+              )}
+              {currentTask?.status === 'running' && (
+                <Button 
+                  danger 
+                  icon={<PauseCircleOutlined />}
+                  onClick={() => cancelTaskMutation.mutate(currentTaskId)}
+                  loading={cancelTaskMutation.isPending}
+                >
+                  取消任务
+                </Button>
+              )}
+              <Button 
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                  setCurrentTaskId(null);
+                  setResults([]);
+                  setIsStreaming(false);
+                  stopSSEConnection();
+                  form.resetFields();
+                }}
+              >
+                重新开始
+              </Button>
+            </Space>
+          )
+        }
+      >
+        {!currentTaskId ? (
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={handleSubmit}
+            initialValues={{
+              period: '1y',
+              max_candidates: 5,
+              exclude_st: true,
+              board: 'all',
+              technical_weight: 0.4,
+              macro_weight: 0.35,
+              news_weight: 0.25,
+              temperature: 0.7
+            }}
+          >
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  name="keyword"
+                  label="关键词"
+                  rules={[{ required: true, message: '请输入关键词' }]}
+                >
+                  <Input placeholder="例如：新能源、人工智能、医药等" />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="period" label="分析周期">
+                  <Select>
+                    <Option value="1y">1年</Option>
+                    <Option value="6mo">6个月</Option>
+                    <Option value="3mo">3个月</Option>
+                    <Option value="1mo">1个月</Option>
+                  </Select>
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="max_candidates" label="最大候选数">
+                  <InputNumber min={5} max={100} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item name="board" label="板块筛选">
+                  <Select>
+                    <Option value="all">全部板块</Option>
+                    <Option value="main">主板</Option>
+                    <Option value="gem">创业板</Option>
+                    <Option value="star">科创板</Option>
+                  </Select>
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="exclude_st" label="排除ST" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="min_market_cap" label="最小市值(亿)">
+                  <InputNumber min={0} step={10} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="provider" label="AI提供商">
+                  <Select placeholder="默认">
+                    <Option value="openai">OpenAI</Option>
+                    <Option value="deepseek">DeepSeek</Option>
+                    <Option value="gemini">Gemini</Option>
+                  </Select>
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item name="technical_weight" label="技术权重">
+                  <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="macro_weight" label="宏观权重">
+                  <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="news_weight" label="新闻权重">
+                  <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="temperature" label="AI创造性">
+                  <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Form.Item>
+              <Button 
+                type="primary" 
+                htmlType="submit" 
+                loading={createTaskMutation.isPending}
+                icon={createTaskMutation.isPending ? <LoadingOutlined /> : <ThunderboltOutlined />}
+                size="large"
+                style={{ minWidth: 160 }}
+              >
+                {createTaskMutation.isPending ? '创建任务中...' : '开始关键词推荐'}
+              </Button>
+              <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
+                🚀 已优化策略：智能缓存 + 超时保护 + 并行处理
+              </div>
+            </Form.Item>
+          </Form>
+        ) : (
+          <div>
+            {/* 任务状态显示 */}
+            {currentTask && (
+              <Card size="small" style={{ marginBottom: 16 }}>
+                {/* AI阶段指示器 */}
+                {aiPhase !== 'idle' && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Timeline>
+                      <Timeline.Item 
+                        color={aiPhase === 'screening' ? 'blue' : 'green'}
+                        dot={aiPhase === 'screening' ? <Spin indicator={<LoadingOutlined spin />} /> : <CheckCircleOutlined />}
+                      >
+                        <div>
+                          <Text strong>AI股票筛选</Text>
+                          {aiPhase === 'screening' && (
+                            <>
+                              <Tag color="processing" style={{ marginLeft: 8 }}>进行中</Tag>
+                              <Text type="secondary" style={{ marginLeft: 8 }}>
+                                AI正在从全市场筛选相关股票...
+                              </Text>
+                            </>
+                          )}
+                          {aiPhase !== 'screening' && screeningDuration > 0 && (
+                            <Text type="secondary" style={{ marginLeft: 8 }}>
+                              耗时 {(screeningDuration / 1000).toFixed(1)}秒
+                            </Text>
+                          )}
+                        </div>
+                      </Timeline.Item>
+                      <Timeline.Item 
+                        color={aiPhase === 'analyzing' ? 'blue' : aiPhase === 'completed' ? 'green' : 'gray'}
+                        dot={aiPhase === 'analyzing' ? <Spin indicator={<LoadingOutlined spin />} /> : 
+                             aiPhase === 'completed' ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+                      >
+                        <div>
+                          <Text strong>深度分析</Text>
+                          {aiPhase === 'analyzing' && (
+                            <>
+                              <Tag color="processing" style={{ marginLeft: 8 }}>分析中</Tag>
+                              <Text type="secondary" style={{ marginLeft: 8 }}>
+                                并行分析候选股票，生成推荐评分...
+                              </Text>
+                            </>
+                          )}
+                          {aiPhase === 'completed' && (
+                            <Tag color="success" style={{ marginLeft: 8 }}>已完成</Tag>
+                          )}
+                        </div>
+                      </Timeline.Item>
+                    </Timeline>
+                  </div>
+                )}
+                
+                {/* 优化提示 */}
+                {showOptimizationTips && aiPhase === 'screening' && (
+                  <Alert
+                    type="info"
+                    icon={<BulbOutlined />}
+                    message="性能优化提示"
+                    description={
+                      <div>
+                        <div>AI股票筛选正在进行中，已实施以下优化策略：</div>
+                        <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20 }}>
+                          <li>🧠 <strong>智能缓存</strong>：相同关键词1小时内直接使用缓存结果</li>
+                          <li>⚡ <strong>超时保护</strong>：AI调用设置10秒超时，超时自动降级</li>
+                          <li>🔄 <strong>降级策略</strong>：AI失败时自动切换到关键词匹配</li>
+                          <li>⚙️ <strong>简化提示词</strong>：减少AI传输延迟</li>
+                        </ul>
+                      </div>
+                    }
+                    style={{ marginBottom: 16 }}
+                    closable
+                    onClose={() => setShowOptimizationTips(false)}
+                  />
+                )}
+                
+                <Row gutter={16}>
+                  <Col span={6}>
+                    <Statistic 
+                      title="任务状态" 
+                      value={currentTask.status} 
+                      valueStyle={{ 
+                        color: currentTask.status === 'completed' ? '#3f8600' : 
+                               currentTask.status === 'failed' ? '#cf1322' : '#1890ff' 
+                      }}
+                      prefix={
+                        currentTask.status === 'running' ? <RobotOutlined spin /> :
+                        currentTask.status === 'completed' ? <CheckCircleOutlined /> :
+                        currentTask.status === 'failed' ? <CloseCircleOutlined /> : null
+                      }
+                    />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic 
+                      title="总体进度" 
+                      value={`${currentTask.progress_percent.toFixed(1)}%`}
+                      prefix={<BarChartOutlined />}
+                    />
+                  </Col>
+                  <Col span={6}>
+                    <Statistic 
+                      title="已处理" 
+                      value={`${currentTask.completed_symbols}/${currentTask.total_symbols}`}
+                      prefix={<CheckCircleOutlined />}
+                    />
+                  </Col>
+                  <Col span={6}>
+                    <Badge count={currentTask.successful_count} showZero>
+                      <Statistic title="成功数" value={currentTask.successful_count} />
+                    </Badge>
+                  </Col>
+                </Row>
+                
+                {currentTask.progress_percent > 0 && (
+                  <>
+                    <Progress 
+                      percent={Math.round(currentTask.progress_percent)} 
+                      status={currentTask.status === 'failed' ? 'exception' : 'active'}
+                      style={{ marginTop: 16 }}
+                      strokeColor={{
+                        '0%': '#108ee9',
+                        '100%': '#87d068',
+                      }}
+                    />
+                    
+                    {aiPhase === 'screening' && currentTask.progress_percent < 5 && (
+                      <div style={{ textAlign: 'center', marginTop: 8 }}>
+                        <Spin indicator={<LoadingOutlined spin />} />
+                        <Text type="secondary" style={{ marginLeft: 8 }}>AI正在智能筛选股票池，请稍候...</Text>
+                      </div>
+                    )}
+                  </>
+                )}
+                
+                {currentTask.current_symbol && (
+                  <div style={{ marginTop: 12 }}>
+                    <Text type="secondary">当前分析: </Text>
+                    <Tooltip title="正在进行技术分析和AI深度评估">
+                      <Tag color="processing" icon={<LoadingOutlined />}>
+                        {currentTask.current_symbol}
+                      </Tag>
+                    </Tooltip>
+                    {aiPhase === 'analyzing' && (
+                      <Text type="secondary" style={{ marginLeft: 8 }}>
+                        🧠 并行分析中，最夒3只股票同时处理
+                      </Text>
+                    )}
+                  </div>
+                )}
+                
+                {currentTask.error_message && (
+                  <Alert
+                    type="error"
+                    message="任务执行错误"
+                    description={
+                      <div>
+                        <div>{currentTask.error_message}</div>
+                        <div style={{ marginTop: 8 }}>
+                          <Text type="secondary">提示：系统已启用多重容错机制，可尝试重新开始或联系管理员。</Text>
+                        </div>
+                      </div>
+                    }
+                    style={{ marginTop: 16 }}
+                    showIcon
+                  />
+                )}
+              </Card>
+            )}
+
+            {/* 实时结果显示 */}
+            {results.length > 0 && (
+              <Card title="实时推荐结果" size="small" style={{ marginBottom: 16 }}>
+                <List
+                  grid={{ gutter: 16, column: 2 }}
+                  dataSource={results}
+                  renderItem={(item) => (
+                    <List.Item>
+                      <RecommendationResultCard result={item} />
+                    </List.Item>
+                  )}
+                />
+              </Card>
+            )}
+
+            {/* 最终结果显示 */}
+            {taskResults && taskResults.length > 0 && (
+              <Card 
+                title={
+                  <span>
+                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    最终推荐结果 ({taskResults.length}个)
+                  </span>
+                }
+              >
+                <List
+                  grid={{ gutter: 16, column: 2 }}
+                  dataSource={taskResults}
+                  renderItem={(item) => (
+                    <List.Item>
+                      <RecommendationResultCard result={item} />
+                    </List.Item>
+                  )}
+                />
+              </Card>
+            )}
+
+            {/* 空状态 */}
+            {currentTask?.status === 'completed' && (!taskResults || taskResults.length === 0) && results.length === 0 && (
+              <Empty 
+                description="未找到符合条件的推荐结果"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            )}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+};
+
+export default StreamingKeywordForm;
